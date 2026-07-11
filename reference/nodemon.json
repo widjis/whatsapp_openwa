@@ -1,0 +1,7 @@
+{
+  "ignore": [
+    "auth_info_baileys/*",
+    "auth_info_baileys",
+    "baileys_store.json"
+  ]
+}

@@ -1,0 +1,37 @@
+name: whatsapp-api-multi
+
+x-whatsapp-api-base: &whatsapp-api-base
+  build:
+    context: .
+  env_file:
+    - .env
+  restart: always
+
+services:
+  whatsapp-api-8192:
+    <<: *whatsapp-api-base
+    environment:
+      DATA_DIR: /app/data
+      SHAREPOINT_TOKEN_CACHE_PATH: token/sharepoint_token_cache.json
+      PORT: 8192
+      DISPATCHER_GATEWAY_BASE_URL: http://127.0.0.1:8192
+    ports:
+      - "8192:8192"
+    volumes:
+      - ./data-8192:/app/data
+
+  whatsapp-api-8193:
+    <<: *whatsapp-api-base
+    environment:
+      DATA_DIR: /app/data
+      PORT: 8193
+      DISPATCHER_ENABLED: "false"
+      N8N_ENABLED: "false"
+      REPLY_GATEWAY_ENABLED: "false"
+      REPLY_GATEWAY_AI_ENABLED: "false"
+      SERVICE_CATEGORY_AI_ENABLED: "false"
+      OPENAI_API_KEY: ""
+    ports:
+      - "8193:8193"
+    volumes:
+      - ./data-8193:/app/data

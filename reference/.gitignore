@@ -1,0 +1,40 @@
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment and secrets
+.env
+*.env
+*.key
+*.crt
+*.pem
+*.pfx
+
+# Baileys auth and store
+auth_info_baileys/
+baileys_store.json
+
+# Uploads and temp
+uploads/
+tmp/
+temp/
+src/features/integrations/temp_pdf_files/
+
+# Local data
+data/
+
+# Legacy reference (keep out of git)
+reference/
+
+# OS / editor files
+.DS_Store
+.vscode/
+.trae/
+*.swp
+
+# Logs
+*.log

@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>MTI WhatsApp API</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+      background-color: #f4f4f4;
+    }
+    #app {
+      text-align: center;
+      background: white;
+      padding: 20px;
+      border-radius: 10px;
+      box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+    }
+    h1 {
+      margin-bottom: 20px;
+    }
+    #messages {
+      list-style: none;
+      padding: 0;
+      margin-bottom: 20px;
+    }
+    #messages li {
+      padding: 8px;
+      margin-bottom: 10px;
+      background: #efefef;
+      border-radius: 4px;
+    }
+    #qrcode-container {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      margin: 10px 0;
+    }
+    #qrcode {
+      display: none; /* Show when QR code is received */
+      width: 250px;  /* Adjust the width to make the QR code smaller */
+      height: 250px; /* Adjust the height to make the QR code smaller */
+      border: 1px solid #efefef;
+      border-radius: 4px;
+    }
+    #status {
+      padding: 8px;
+      background: #efefef;
+      border-radius: 4px;
+      margin-bottom: 20px;
+    }
+    #closeNotification {
+      display: none; /* Show when WhatsApp is ready */
+      margin-top: 20px;
+      font-size: 16px;
+      color: green;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="app">
+    <img src="https://img2.lokercepat.id/files/2024-03-26/pt-merdeka-tsingshan-indonesia-279.jpg" alt="Logo" style="width:100%;max-width:300px;margin-bottom:20px;">
+    <h1>MTI WhatsApp API</h1>
+    <div id="status">Connecting...</div>
+    <ul id="messages"></ul>
+    <div id="qrcode-container">
+      <img id="qrcode" src="" alt="QR Code">
+    </div>
+    <div id="closeNotification">You can close the browser now!</div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+  <script>
+    var socket = io();
+
+    socket.on('connect', function() {
+      console.log('Connected to server');
+      updateStatus('Connected to server');
+    });
+
+    function renderFormattedMessage(text) {
+      return text
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/__(.*?)__/g, '<em>$1</em>')
+        .replace(/~~(.*?)~~/g, '<del>$1</del>')
+        .replace(/\n/g, '<br>');
+    }
+
+    socket.on('message', function(msg) {
+      console.log('Message received:', msg);
+      const messages = document.getElementById('messages');
+      if (messages) {
+        const li = document.createElement('li');
+        li.innerHTML = renderFormattedMessage(msg);
+        messages.appendChild(li);
+        updateStatus('New message received');
+      }
+    });
+
+    socket.on('qr', function(src) {
+      console.log('QR code received:', src);
+      var img = document.getElementById('qrcode');
+      img.src = src;
+      img.style.display = 'block';
+      updateStatus('QR Code received, scan please!');
+    });
+
+    socket.on('ready', function(msg) {
+      console.log('WhatsApp is ready:', msg);
+      var img = document.getElementById('qrcode');
+      img.style.display = 'none';
+      updateStatus(msg);
+      showCloseNotification();
+    });
+
+    socket.on('authenticated', function(msg) {
+      console.log('WhatsApp is authenticated:', msg);
+      var img = document.getElementById('qrcode');
+      img.style.display = 'none';
+      updateStatus(msg);
+    });
+
+    socket.on('disconnect', function() {
+      console.log('Disconnected from server');
+      updateStatus('Disconnected from server');
+    });
+
+    function updateStatus(msg) {
+      var statusDiv = document.getElementById('status');
+      statusDiv.textContent = msg;
+    }
+
+    function showCloseNotification() {
+      var closeNotification = document.getElementById('closeNotification');
+      closeNotification.style.display = 'block';
+    }
+  </script>
+
+</body>
+</html>

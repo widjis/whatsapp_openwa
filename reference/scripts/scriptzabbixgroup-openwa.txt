@@ -1,0 +1,192 @@
+var OpenWA = {
+    baseUrl: null,
+    apiKey: null,
+    sessionId: null,
+    id: null,
+    name: null,
+    message: null
+};
+
+function parseJsonSafe(value) {
+    try {
+        return JSON.parse(value);
+    } catch (error) {
+        return null;
+    }
+}
+
+function normalizeGroupId(groupId) {
+    if (typeof groupId !== 'string') {
+        throw 'Incorrect value is given for parameter "GroupID": invalid group id';
+    }
+
+    var trimmed = groupId.replace(/^\s+|\s+$/g, '');
+    if (!trimmed) {
+        throw 'Incorrect value is given for parameter "GroupID": invalid group id';
+    }
+
+    if (/@g\.us$/.test(trimmed)) {
+        return trimmed;
+    }
+
+    return trimmed + '@g.us';
+}
+
+function getGroups() {
+    var url = OpenWA.baseUrl + '/api/sessions/' + encodeURIComponent(OpenWA.sessionId) + '/groups';
+    var request = new HttpRequest();
+    request.addHeader('Content-Type: application/json');
+    request.addHeader('X-API-Key: ' + OpenWA.apiKey);
+
+    Zabbix.log(4, '[OpenWA Group Webhook] group lookup URL: ' + url);
+
+    var response = request.get(url);
+    var statusCode = request.getStatus();
+
+    Zabbix.log(4, '[OpenWA Group Webhook] group lookup HTTP code: ' + statusCode);
+    Zabbix.log(4, '[OpenWA Group Webhook] group lookup raw response: ' + response);
+
+    response = parseJsonSafe(response);
+
+    if (statusCode < 200 || statusCode >= 300 || response === null) {
+        throw 'Failed to lookup groups from OpenWA';
+    }
+
+    if (Object.prototype.toString.call(response) !== '[object Array]') {
+        if (response.data && Object.prototype.toString.call(response.data) === '[object Array]') {
+            return response.data;
+        }
+
+        throw 'Unexpected group lookup response from OpenWA';
+    }
+
+    return response;
+}
+
+function resolveGroupChatId() {
+    if (typeof OpenWA.id === 'string' && OpenWA.id.replace(/^\s+|\s+$/g, '') !== '') {
+        return normalizeGroupId(OpenWA.id);
+    }
+
+    var wantedName = String(OpenWA.name || '').replace(/^\s+|\s+$/g, '');
+    if (!wantedName) {
+        throw 'Incorrect value is given for parameters "GroupID" and "GroupName": at least one parameter is required';
+    }
+
+    var groups = getGroups();
+    var exactMatches = [];
+    var partialMatches = [];
+    var wantedLower = wantedName.toLowerCase();
+    var i;
+
+    for (i = 0; i < groups.length; i++) {
+        var group = groups[i];
+        if (!group || typeof group !== 'object') {
+            continue;
+        }
+
+        var groupId = typeof group.id === 'string' ? group.id : typeof group.groupId === 'string' ? group.groupId : null;
+        var groupName =
+            typeof group.name === 'string'
+                ? group.name
+                : typeof group.subject === 'string'
+                    ? group.subject
+                    : typeof group.title === 'string'
+                        ? group.title
+                        : '';
+
+        if (!groupId || !groupName) {
+            continue;
+        }
+
+        if (groupName.toLowerCase() === wantedLower) {
+            exactMatches.push({ id: groupId, name: groupName });
+            continue;
+        }
+
+        if (groupName.toLowerCase().indexOf(wantedLower) !== -1) {
+            partialMatches.push({ id: groupId, name: groupName });
+        }
+    }
+
+    if (exactMatches.length === 1) {
+        return exactMatches[0].id;
+    }
+
+    if (exactMatches.length > 1) {
+        throw 'Multiple groups matched GroupName exactly: ' + wantedName;
+    }
+
+    if (partialMatches.length === 1) {
+        return partialMatches[0].id;
+    }
+
+    if (partialMatches.length > 1) {
+        throw 'Multiple groups matched GroupName partially: ' + wantedName;
+    }
+
+    throw 'Group not found in OpenWA for GroupName: ' + wantedName;
+}
+
+function sendWhatsAppGroupMessage() {
+    var chatId = resolveGroupChatId();
+    var url = OpenWA.baseUrl + '/api/sessions/' + encodeURIComponent(OpenWA.sessionId) + '/messages/send-text';
+    var params = {
+        chatId: chatId,
+        text: OpenWA.message
+    };
+
+    var data = JSON.stringify(params);
+    var request = new HttpRequest();
+    request.addHeader('Content-Type: application/json');
+    request.addHeader('X-API-Key: ' + OpenWA.apiKey);
+
+    Zabbix.log(4, '[OpenWA Group Webhook] URL: ' + url);
+    Zabbix.log(4, '[OpenWA Group Webhook] params: ' + data);
+
+    var response = request.post(url, data);
+    var statusCode = request.getStatus();
+
+    Zabbix.log(4, '[OpenWA Group Webhook] HTTP code: ' + statusCode);
+    Zabbix.log(4, '[OpenWA Group Webhook] raw response: ' + response);
+
+    response = parseJsonSafe(response);
+
+    if (statusCode < 200 || statusCode >= 300 || !response || typeof response.messageId !== 'string') {
+        if (response && typeof response.message === 'string') {
+            throw response.message;
+        } else {
+            throw 'Unknown OpenWA error. Check debug log for more information.';
+        }
+    }
+}
+
+try {
+    var params = JSON.parse(value);
+
+    if (typeof params.GroupID === 'undefined' && typeof params.GroupName === 'undefined') {
+        throw 'Incorrect value is given for parameters "GroupID" and "GroupName": at least one parameter is required';
+    }
+
+    if (typeof params.ApiKey === 'undefined') {
+        throw 'Parameter "ApiKey" is missing';
+    }
+
+    if (typeof params.SessionId === 'undefined') {
+        throw 'Parameter "SessionId" is missing';
+    }
+
+    OpenWA.baseUrl = params.BaseUrl || 'http://10.60.10.59:2785';
+    OpenWA.apiKey = params.ApiKey;
+    OpenWA.sessionId = params.SessionId;
+    OpenWA.id = params.GroupID;
+    OpenWA.name = params.GroupName;
+    OpenWA.message = params.Subject + '\n' + params.Message;
+
+    sendWhatsAppGroupMessage();
+
+    return 'OK';
+} catch (error) {
+    Zabbix.log(4, '[OpenWA Group Webhook] notification failed: ' + error);
+    throw 'Sending failed: ' + error + '.';
+}

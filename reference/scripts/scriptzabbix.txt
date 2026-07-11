@@ -1,0 +1,55 @@
+var WhatsApp = {
+    url: 'http://10.60.10.59:8193/send-message',
+    number: null,
+    message: null
+};
+
+function sendWhatsAppMessage() {
+    var params = {
+        number: WhatsApp.number,
+        message: WhatsApp.message
+    };
+
+    var data = JSON.stringify(params);
+    var request = new HttpRequest();
+    request.addHeader('Content-Type: application/json');
+
+    Zabbix.log(4, '[WhatsApp Webhook] URL: ' + WhatsApp.url);
+    Zabbix.log(4, '[WhatsApp Webhook] params: ' + data);
+
+    var response = request.post(WhatsApp.url, data);
+
+    Zabbix.log(4, '[WhatsApp Webhook] HTTP code: ' + request.getStatus());
+
+    try {
+        response = JSON.parse(response);
+    } catch (error) {
+        response = null;
+    }
+
+    if (request.getStatus() !== 200 || typeof response.status !== 'boolean' || response.status !== true) {
+        if (typeof response.message === 'string') {
+            throw response.message;
+        } else {
+            throw 'Unknown error. Check debug log for more information.';
+        }
+    }
+}
+
+try {
+    var params = JSON.parse(value);
+
+    if (typeof params.Number === 'undefined') {
+        throw 'Incorrect value is given for parameter "Number": parameter is missing';
+    }
+
+    WhatsApp.number = params.Number;
+    WhatsApp.message = params.Subject + '\n' + params.Message;
+
+    sendWhatsAppMessage();
+
+    return 'OK';
+} catch (error) {
+    Zabbix.log(4, '[WhatsApp Webhook] notification failed: ' + error);
+    throw 'Sending failed: ' + error + '.';
+}

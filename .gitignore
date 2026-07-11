@@ -1,0 +1,26 @@
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+npm-debug.log*
+
+# Environment and secrets
+.env
+*.env
+*.key
+*.crt
+*.pem
+*.pfx
+
+# Runtime data
+data/
+uploads/
+tmp/
+temp/
+*.log
+
+# OS / editor
+.DS_Store
+.vscode/
+.trae/
+*.swp

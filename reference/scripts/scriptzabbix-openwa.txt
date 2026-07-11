@@ -1,0 +1,83 @@
+var OpenWA = {
+    baseUrl: null,
+    apiKey: null,
+    sessionId: null,
+    number: null,
+    message: null
+};
+
+function normalizeChatId(number) {
+    var digits = String(number).replace(/[^\d]/g, '');
+
+    if (!digits) {
+        throw 'Incorrect value is given for parameter "Number": invalid phone number';
+    }
+
+    return digits + '@c.us';
+}
+
+function sendWhatsAppMessage() {
+    var chatId = normalizeChatId(OpenWA.number);
+    var url = OpenWA.baseUrl + '/api/sessions/' + encodeURIComponent(OpenWA.sessionId) + '/messages/send-text';
+    var params = {
+        chatId: chatId,
+        text: OpenWA.message
+    };
+
+    var data = JSON.stringify(params);
+    var request = new HttpRequest();
+    request.addHeader('Content-Type: application/json');
+    request.addHeader('X-API-Key: ' + OpenWA.apiKey);
+
+    Zabbix.log(4, '[OpenWA Webhook] URL: ' + url);
+    Zabbix.log(4, '[OpenWA Webhook] params: ' + data);
+
+    var response = request.post(url, data);
+    var statusCode = request.getStatus();
+
+    Zabbix.log(4, '[OpenWA Webhook] HTTP code: ' + statusCode);
+    Zabbix.log(4, '[OpenWA Webhook] raw response: ' + response);
+
+    try {
+        response = JSON.parse(response);
+    } catch (error) {
+        response = null;
+    }
+
+    if (statusCode < 200 || statusCode >= 300 || !response || typeof response.messageId !== 'string') {
+        if (response && typeof response.message === 'string') {
+            throw response.message;
+        } else {
+            throw 'Unknown OpenWA error. Check debug log for more information.';
+        }
+    }
+}
+
+try {
+    var params = JSON.parse(value);
+
+    if (typeof params.Number === 'undefined') {
+        throw 'Incorrect value is given for parameter "Number": parameter is missing';
+    }
+
+    if (typeof params.ApiKey === 'undefined') {
+        throw 'Parameter "ApiKey" is missing';
+    }
+
+    if (typeof params.SessionId === 'undefined') {
+        throw 'Parameter "SessionId" is missing';
+    }
+
+    OpenWA.baseUrl = params.BaseUrl || 'http://10.60.10.59:2785';
+    OpenWA.apiKey = params.ApiKey;
+    OpenWA.sessionId = params.SessionId;
+    OpenWA.number = params.Number;
+    OpenWA.message = params.Subject + '\n' + params.Message;
+
+    sendWhatsAppMessage();
+
+    return 'OK';
+} catch (error) {
+    Zabbix.log(4, '[OpenWA Webhook] notification failed: ' + error);
+    throw 'Sending failed: ' + error + '.';
+}
