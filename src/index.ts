@@ -93,4 +93,15 @@ registerWebhookRoutes({
 
 app.listen(config.port, () => {
   console.log(`Server running on port ${config.port}`)
+  console.log(
+    '[startup]',
+    JSON.stringify({
+      openwaConfigured: openwaClient.isConfigured(),
+      webhookUrlConfigured: Boolean(config.openwa.webhookUrl),
+      allowedIpCount: config.allowedIps.length,
+      allowedPhoneCount: config.allowedPhoneNumbers.length,
+      dataDir: config.dataDir,
+      uploadsDir,
+    })
+  )
 })

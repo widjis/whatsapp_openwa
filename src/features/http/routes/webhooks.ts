@@ -37,16 +37,110 @@ function hasValidationError(req: Request, res: Response): boolean {
   return false;
 }
 
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim().length > 0) return value;
+  }
+  return null;
+}
+
+function toRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function truncate(value: string, maxLength = 120): string {
+  return value.length <= maxLength ? value : `${value.slice(0, maxLength - 3)}...`;
+}
+
+function extractIncomingEventType(body: unknown): string | null {
+  const record = toRecord(body);
+  if (!record) return null;
+  const nested = toRecord(record.payload) ?? toRecord(record.data) ?? toRecord(record.message);
+  return firstString(record.event, record.type, nested?.event, nested?.type);
+}
+
+function extractIncomingSessionId(body: unknown): string | null {
+  const record = toRecord(body);
+  if (!record) return null;
+  const nested = toRecord(record.payload) ?? toRecord(record.data) ?? toRecord(record.message);
+  return firstString(record.sessionId, record.session_id, nested?.sessionId, nested?.session_id);
+}
+
+function summarizeBody(body: unknown): Record<string, unknown> {
+  const record = toRecord(body);
+  if (!record) return { bodyType: typeof body };
+
+  const payload = toRecord(record.payload) ?? toRecord(record.data) ?? record;
+  const payloadMessage = toRecord(payload.message);
+  const key = payloadMessage ? toRecord(payloadMessage.key) : null;
+  const previewText = firstString(
+    payload.text,
+    payload.body,
+    payload.messageText,
+    payloadMessage?.text,
+    toRecord(payloadMessage?.extendedTextMessage)?.text,
+    toRecord(payloadMessage?.imageMessage)?.caption,
+    toRecord(payloadMessage?.videoMessage)?.caption
+  );
+
+  return {
+    topLevelKeys: Object.keys(record),
+    payloadKeys: Object.keys(payload),
+    eventType: extractIncomingEventType(body),
+    sessionId: extractIncomingSessionId(body),
+    chatId: firstString(payload.chatId, payload.remoteJid, payload.from, payload.to, payloadMessage?.chatId, key?.remoteJid),
+    senderId: firstString(payload.senderId, payload.author, payload.participant, payload.from, payloadMessage?.senderId, key?.participant),
+    messageId: firstString(payload.messageId, payload.id, payloadMessage?.messageId, key?.id),
+    textPreview: previewText ? truncate(previewText) : null,
+  };
+}
+
 export function registerWebhookRoutes(deps: RegisterWebhookRoutesDeps) {
   deps.app.post('/channel/webhooks/openwa', async (req: Request, res: Response) => {
     try {
+      console.log('[webhook:received]', JSON.stringify({
+        path: req.path,
+        method: req.method,
+        eventType: extractIncomingEventType(req.body),
+        sessionId: extractIncomingSessionId(req.body),
+        remoteAddress: req.ip,
+        summary: summarizeBody(req.body),
+      }));
+
       const capture = await deps.captureStore.save({
         headers: toHeaderRecord(req.headers),
         payload: req.body,
       });
+      console.log('[webhook:capture_saved]', JSON.stringify({
+        captureId: capture.captureId,
+        eventType: capture.eventType,
+        sessionId: capture.sessionId,
+      }));
 
       const normalizedMessage = normalizeInboundMessageEvent(req.body);
+      if (normalizedMessage) {
+        console.log('[webhook:normalized]', JSON.stringify({
+          eventType: normalizedMessage.eventType,
+          sessionId: normalizedMessage.sessionId,
+          chatId: normalizedMessage.chatId,
+          senderId: normalizedMessage.senderId,
+          isGroup: normalizedMessage.isGroup,
+          messageId: normalizedMessage.messageId,
+          textPreview: truncate(normalizedMessage.text),
+        }));
+      } else {
+        console.log('[webhook:normalize_skipped]', JSON.stringify({
+          eventType: extractIncomingEventType(req.body),
+          summary: summarizeBody(req.body),
+        }));
+      }
+
       const processed = normalizedMessage ? await deps.commandService.processInboundMessage(normalizedMessage) : { handled: false };
+      console.log('[webhook:processed]', JSON.stringify({
+        eventType: normalizedMessage?.eventType ?? extractIncomingEventType(req.body),
+        handled: processed.handled,
+        commandName: processed.commandName ?? null,
+      }));
 
       res.status(202).json({
         status: true,
@@ -60,6 +154,7 @@ export function registerWebhookRoutes(deps: RegisterWebhookRoutesDeps) {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      console.error('[webhook:error]', error);
       res.status(500).json({ status: false, message });
     }
   });

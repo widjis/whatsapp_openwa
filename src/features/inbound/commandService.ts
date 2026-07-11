@@ -20,6 +20,10 @@ const HELP_TEXT = [
   '- integrasi LDAP/Snipe-IT full dari reference belum dipindah ke root app',
 ].join('\n')
 
+function truncate(value: string, maxLength = 120): string {
+  return value.length <= maxLength ? value : `${value.slice(0, maxLength - 3)}...`
+}
+
 export class InboundCommandService {
   private readonly allowedPhones: string[]
 
@@ -28,6 +32,10 @@ export class InboundCommandService {
     allowedPhoneNumbers: string[]
   ) {
     this.allowedPhones = allowedPhoneNumbers.map(normalizePhoneDigits).filter(Boolean)
+    console.log('[command:init]', JSON.stringify({
+      allowedPhoneCount: this.allowedPhones.length,
+      accessMode: this.allowedPhones.length > 0 ? 'restricted' : 'open',
+    }))
   }
 
   private isAllowed(senderId: string): boolean {
@@ -92,12 +100,46 @@ export class InboundCommandService {
   }
 
   async processInboundMessage(event: InboundMessageEvent): Promise<{ handled: boolean; commandName?: string }> {
+    console.log('[command:incoming]', JSON.stringify({
+      eventType: event.eventType,
+      sessionId: event.sessionId,
+      chatId: event.chatId,
+      senderId: event.senderId,
+      isGroup: event.isGroup,
+      messageId: event.messageId,
+      textPreview: truncate(event.text),
+    }))
+
     const result = this.handleCommandText(event.text, event.senderId)
     if (!result.handled || !result.replyText) {
+      console.log('[command:ignored]', JSON.stringify({
+        reason: 'not_a_supported_command',
+        textPreview: truncate(event.text),
+      }))
       return { handled: false }
     }
 
-    await this.reply(event.chatId, result.replyText)
+    console.log('[command:matched]', JSON.stringify({
+      commandName: result.commandName ?? null,
+      willReply: true,
+      replyPreview: truncate(result.replyText),
+    }))
+
+    try {
+      await this.reply(event.chatId, result.replyText)
+      console.log('[command:reply_sent]', JSON.stringify({
+        commandName: result.commandName ?? null,
+        chatId: event.chatId,
+      }))
+    } catch (error) {
+      console.error('[command:reply_failed]', JSON.stringify({
+        commandName: result.commandName ?? null,
+        chatId: event.chatId,
+        message: error instanceof Error ? error.message : String(error),
+      }))
+      throw error
+    }
+
     return { handled: true, commandName: result.commandName }
   }
 }
