@@ -189,6 +189,8 @@ Allow the first eligible technician to claim a ticket directly from the WhatsApp
    - status may move to `In Progress`
    - claim record is updated
    - confirmation message is sent to the group
+   - assigned technician may receive a direct best-effort notification
+   - requester may receive a direct best-effort assignment notification
 
 ### Competing claim path
 1. Another technician reacts after a claim already exists.

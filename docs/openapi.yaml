@@ -1,0 +1,841 @@
+openapi: 3.1.0
+info:
+  title: WhatsApp OpenWA Rebuild API
+  version: 0.1.0
+  description: >
+    Contract baseline for the active root runtime. This file must be reviewed for
+    every backend change and updated in the same work item whenever request,
+    response, auth, validation, header, or route behavior changes.
+x-maintenance-rules:
+  backend_changes_require_review: true
+  same_task_update_required: true
+  update_when_changed:
+    - routes
+    - request payloads
+    - response payloads
+    - headers
+    - auth rules
+    - validation rules
+    - status codes
+    - integration contract behavior
+servers:
+  - url: http://localhost:8192
+tags:
+  - name: Health
+  - name: Messages
+  - name: Channel
+  - name: Webhooks
+components:
+  parameters:
+    XForwardedFor:
+      name: X-Forwarded-For
+      in: header
+      required: false
+      schema:
+        type: string
+      description: >
+        Optional proxy-forwarded client IP. Admin routes are protected by the
+        server-side allowlist and may return `403 Forbidden` when the resolved
+        client IP is not allowed.
+    CaptureLimit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    CaptureEventType:
+      name: eventType
+      in: query
+      required: true
+      schema:
+        type: string
+  schemas:
+    StatusEnvelope:
+      type: object
+      properties:
+        status:
+          type: boolean
+      required:
+        - status
+    ErrorEnvelope:
+      type: object
+      properties:
+        status:
+          type: boolean
+          const: false
+        message:
+          type: string
+      required:
+        - status
+        - message
+    ValidationErrorEnvelope:
+      type: object
+      properties:
+        status:
+          type: boolean
+          const: false
+        errors:
+          type: object
+          additionalProperties:
+            type: string
+      required:
+        - status
+        - errors
+    HealthResponse:
+      allOf:
+        - $ref: '#/components/schemas/StatusEnvelope'
+        - type: object
+          properties:
+            status:
+              const: true
+    RootResponse:
+      allOf:
+        - $ref: '#/components/schemas/StatusEnvelope'
+        - type: object
+          properties:
+            status:
+              const: true
+            service:
+              type: string
+            phase:
+              type: string
+            openwaConfigured:
+              type: boolean
+          required:
+            - service
+            - phase
+            - openwaConfigured
+    SendMessageRequest:
+      type: object
+      properties:
+        number:
+          type: string
+        message:
+          type: string
+        imageUrl:
+          type: string
+          format: uri
+        imageBuffer:
+          type: string
+          description: Base64-encoded image payload.
+      required:
+        - number
+    SendBulkMessageRequest:
+      type: object
+      properties:
+        message:
+          type: string
+        numbers:
+          type: array
+          items:
+            type: string
+        minDelay:
+          type: integer
+        maxDelay:
+          type: integer
+      required:
+        - message
+        - numbers
+    SendGroupMessageRequest:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Group JID or numeric group id.
+        name:
+          type: string
+          description: Group subject name used for lookup when `id` is omitted.
+        message:
+          type: string
+        mention:
+          type: string
+          description: JSON-encoded array of mention JIDs or phone objects.
+    HelpdeskWebhookRequest:
+      type: object
+      properties:
+        id:
+          type: string
+          description: ServiceDesk ticket identifier.
+        status:
+          type: string
+          enum: [new, updated]
+        receiver:
+          type: string
+          description: Target WhatsApp JID or raw phone/group identifier for the main notification.
+        receiver_type:
+          type: string
+          description: Upstream receiver classification from ServiceDesk automation.
+        notify_requester_new:
+          type: string
+          enum: ['true', 'false']
+        notify_requester_update:
+          type: string
+          enum: ['true', 'false']
+        notify_requester_assign:
+          type: string
+          enum: ['true', 'false']
+        notify_technician:
+          type: string
+          enum: ['true', 'false']
+      required:
+        - id
+        - status
+        - receiver
+        - receiver_type
+    GenericSuccessResponse:
+      allOf:
+        - $ref: '#/components/schemas/StatusEnvelope'
+        - type: object
+          properties:
+            status:
+              const: true
+            response: {}
+    HelpdeskWebhookResponse:
+      type: object
+      properties:
+        status:
+          type: boolean
+        message:
+          type: string
+        receiverSent:
+          type: boolean
+        receiverError:
+          type: string
+          nullable: true
+      required:
+        - status
+        - message
+        - receiverSent
+    SessionResponse:
+      allOf:
+        - $ref: '#/components/schemas/StatusEnvelope'
+        - type: object
+          properties:
+            status:
+              const: true
+            session: {}
+          required:
+            - session
+    SessionQrResponse:
+      allOf:
+        - $ref: '#/components/schemas/StatusEnvelope'
+        - type: object
+          properties:
+            status:
+              const: true
+            qr: {}
+          required:
+            - qr
+    PairingCodeRequest:
+      type: object
+      properties:
+        phoneNumber:
+          type: string
+      required:
+        - phoneNumber
+    PairingCodeResponse:
+      allOf:
+        - $ref: '#/components/schemas/StatusEnvelope'
+        - type: object
+          properties:
+            status:
+              const: true
+            pairing: {}
+          required:
+            - pairing
+    CaptureRecord:
+      type: object
+      properties:
+        captureId:
+          type: string
+        eventType:
+          type: string
+          nullable: true
+        sessionId:
+          type: string
+          nullable: true
+        capturedAt:
+          type: string
+          format: date-time
+      additionalProperties: true
+    CaptureListResponse:
+      allOf:
+        - $ref: '#/components/schemas/StatusEnvelope'
+        - type: object
+          properties:
+            status:
+              const: true
+            captures:
+              type: array
+              items:
+                $ref: '#/components/schemas/CaptureRecord'
+          required:
+            - captures
+    CaptureSingleResponse:
+      allOf:
+        - $ref: '#/components/schemas/StatusEnvelope'
+        - type: object
+          properties:
+            status:
+              const: true
+            capture:
+              $ref: '#/components/schemas/CaptureRecord'
+          required:
+            - capture
+    WebhookRegisterRequest:
+      type: object
+      properties:
+        url:
+          type: string
+          format: uri
+        secret:
+          type: string
+        retryCount:
+          type: integer
+          minimum: 0
+          maximum: 5
+        events:
+          type: array
+          minItems: 1
+          items:
+            type: string
+    WebhookTestRequest:
+      type: object
+      properties:
+        payload:
+          type: object
+          additionalProperties: true
+        headers:
+          type: object
+          additionalProperties:
+            oneOf:
+              - type: string
+              - type: number
+              - type: boolean
+      required:
+        - payload
+    WebhookRegisterResponse:
+      allOf:
+        - $ref: '#/components/schemas/StatusEnvelope'
+        - type: object
+          properties:
+            status:
+              const: true
+            created:
+              type: boolean
+            webhook: {}
+          required:
+            - created
+            - webhook
+    WebhookListResponse:
+      allOf:
+        - $ref: '#/components/schemas/StatusEnvelope'
+        - type: object
+          properties:
+            status:
+              const: true
+            webhooks: {}
+          required:
+            - webhooks
+    WebhookInboundResponse:
+      allOf:
+        - $ref: '#/components/schemas/StatusEnvelope'
+        - type: object
+          properties:
+            status:
+              const: true
+            captured:
+              type: object
+              properties:
+                captureId:
+                  type: string
+                eventType:
+                  type: string
+                  nullable: true
+                sessionId:
+                  type: string
+                  nullable: true
+                capturedAt:
+                  type: string
+                  format: date-time
+            processed:
+              type: object
+              properties:
+                handled:
+                  type: boolean
+                commandName:
+                  type: string
+                  nullable: true
+    WebhookTestResponse:
+      allOf:
+        - $ref: '#/components/schemas/WebhookInboundResponse'
+        - type: object
+          properties:
+            mode:
+              type: string
+              const: test
+  responses:
+    Forbidden:
+      description: Caller IP is not in the server allowlist.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    InternalServerError:
+      description: Unexpected server-side failure.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ValidationFailed:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ValidationErrorEnvelope'
+paths:
+  /:
+    get:
+      tags: [Health]
+      summary: Get root service metadata
+      responses:
+        '200':
+          description: Service metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RootResponse'
+  /health:
+    get:
+      tags: [Health]
+      summary: Get service health status
+      responses:
+        '200':
+          description: Health check passed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /send-message:
+    post:
+      tags: [Messages]
+      summary: Send a direct text or image message
+      parameters:
+        - $ref: '#/components/parameters/XForwardedFor'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendMessageRequest'
+          multipart/form-data:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/SendMessageRequest'
+                - type: object
+                  properties:
+                    image:
+                      type: string
+                      format: binary
+      responses:
+        '200':
+          description: Message accepted by the provider adapter
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericSuccessResponse'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          description: Validation failed or number is not registered
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidationErrorEnvelope'
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /send-bulk-message:
+    post:
+      tags: [Messages]
+      summary: Send the same text message to multiple numbers
+      parameters:
+        - $ref: '#/components/parameters/XForwardedFor'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendBulkMessageRequest'
+      responses:
+        '202':
+          description: Bulk send started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericSuccessResponse'
+        '400':
+          description: Missing message or recipient list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /send-group-message:
+    post:
+      tags: [Messages]
+      summary: Send a text, image, or document message to a group
+      parameters:
+        - $ref: '#/components/parameters/XForwardedFor'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/SendGroupMessageRequest'
+                - type: object
+                  properties:
+                    document:
+                      type: string
+                      format: binary
+                    image:
+                      type: string
+                      format: binary
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendGroupMessageRequest'
+      responses:
+        '200':
+          description: Group message accepted by the provider adapter
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericSuccessResponse'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          description: Validation failed or target group could not be resolved
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidationErrorEnvelope'
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /webhook:
+    post:
+      tags: [Messages]
+      summary: Process a ServiceDesk ticket notification webhook
+      parameters:
+        - $ref: '#/components/parameters/XForwardedFor'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HelpdeskWebhookRequest'
+      responses:
+        '200':
+          description: Webhook processed and main notification attempted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HelpdeskWebhookResponse'
+        '400':
+          description: Invalid webhook payload
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                required:
+                  - error
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: ServiceDesk ticket not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                required:
+                  - error
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /channel/session:
+    get:
+      tags: [Channel]
+      summary: Get the current OpenWA session
+      parameters:
+        - $ref: '#/components/parameters/XForwardedFor'
+      responses:
+        '200':
+          description: Current session returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /channel/session/status:
+    get:
+      tags: [Channel]
+      summary: Get a condensed current session status
+      parameters:
+        - $ref: '#/components/parameters/XForwardedFor'
+      responses:
+        '200':
+          description: Session status returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /channel/session/qr:
+    get:
+      tags: [Channel]
+      summary: Get the current session QR payload
+      parameters:
+        - $ref: '#/components/parameters/XForwardedFor'
+      responses:
+        '200':
+          description: QR payload returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionQrResponse'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /channel/session/start:
+    post:
+      tags: [Channel]
+      summary: Start the current OpenWA session
+      parameters:
+        - $ref: '#/components/parameters/XForwardedFor'
+      responses:
+        '200':
+          description: Session started or already active
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /channel/session/stop:
+    post:
+      tags: [Channel]
+      summary: Stop the current OpenWA session
+      parameters:
+        - $ref: '#/components/parameters/XForwardedFor'
+      responses:
+        '200':
+          description: Session stopped
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /channel/session/pairing-code:
+    post:
+      tags: [Channel]
+      summary: Request a pairing code for the current session
+      parameters:
+        - $ref: '#/components/parameters/XForwardedFor'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PairingCodeRequest'
+      responses:
+        '200':
+          description: Pairing code generated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PairingCodeResponse'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /channel/webhooks/openwa:
+    post:
+      tags: [Webhooks]
+      summary: Receive inbound OpenWA webhook events
+      description: >
+        Public inbound endpoint used by OpenWA. This route persists captures,
+        attempts event normalization, and routes supported slash commands into
+        the root inbound command service.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '202':
+          description: Webhook accepted and capture persisted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookInboundResponse'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /channel/webhooks/captures:
+    get:
+      tags: [Webhooks]
+      summary: List recent stored webhook captures
+      parameters:
+        - $ref: '#/components/parameters/XForwardedFor'
+        - $ref: '#/components/parameters/CaptureLimit'
+      responses:
+        '200':
+          description: Capture list returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaptureListResponse'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /channel/webhooks/captures/latest:
+    get:
+      tags: [Webhooks]
+      summary: Get the latest capture for a specific event type
+      parameters:
+        - $ref: '#/components/parameters/XForwardedFor'
+        - $ref: '#/components/parameters/CaptureEventType'
+      responses:
+        '200':
+          description: Matching capture returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaptureSingleResponse'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: No capture exists for the requested event type
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /channel/webhooks:
+    get:
+      tags: [Webhooks]
+      summary: List current session webhook registrations
+      parameters:
+        - $ref: '#/components/parameters/XForwardedFor'
+      responses:
+        '200':
+          description: Webhook list returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookListResponse'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /channel/webhooks/test:
+    post:
+      tags: [Webhooks]
+      summary: Inject a simulated webhook payload into the root processing pipeline
+      description: >
+        Admin-only helper endpoint for local verification. The provided payload is
+        captured, normalized, and routed through the same processing path used by
+        the real OpenWA inbound webhook endpoint.
+      parameters:
+        - $ref: '#/components/parameters/XForwardedFor'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookTestRequest'
+      responses:
+        '202':
+          description: Test payload accepted and processed through the webhook pipeline
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookTestResponse'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /channel/webhooks/register:
+    post:
+      tags: [Webhooks]
+      summary: Create or ensure the current session webhook registration
+      parameters:
+        - $ref: '#/components/parameters/XForwardedFor'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookRegisterRequest'
+      responses:
+        '200':
+          description: Existing webhook matched and was reused
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookRegisterResponse'
+        '201':
+          description: New webhook created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookRegisterResponse'
+        '400':
+          description: No webhook URL available from config or request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/InternalServerError'

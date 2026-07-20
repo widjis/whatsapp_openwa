@@ -333,7 +333,8 @@ OpenWA source event:
 
 Status:
 - event name is `Confirmed`
-- payload field mapping is `Unverified`
+- reaction-add payload field mapping is `Confirmed` from runtime captures
+- reaction-removal mapping is `Confirmed` from runtime captures and normalized as `removed: true` when `payload.data.reaction = ""`
 
 Required validations:
 - message id field name
@@ -371,9 +372,19 @@ Status:
 
 Critical validations:
 - how reaction removal is represented
-- whether the event contains the original target `messageId`
-- whether the event contains target `chatId`
-- whether sender identity resolves consistently
+- whether sender identity resolves consistently across more group and private samples
+
+Runtime evidence captured so far:
+- `data/webhook-captures/32ef5424-31fd-4b02-9508-f846f2a29c7b.json`
+- `data/webhook-captures/cc5f5de5-5a55-42de-979f-466f168a9390.json`
+- `data/webhook-captures/ce56abc3-a1e3-4e5e-bde5-a47c2f793b9b.json`
+- observed mapping:
+  - `payload.data.messageId` -> target message id
+  - `payload.data.chatId` -> target chat/group id
+  - `payload.data.senderId` -> reacting actor id
+  - no stable actor phone field was present in the captured `@lid` samples, so phone resolution still depends on `DirectoryService.resolvePhone()`
+  - `payload.data.reaction` -> active emoji
+  - `payload.data.reactions` -> actor-to-emoji map
 
 This event is a migration blocker for the helpdesk claim workflow until validated.
 
@@ -411,7 +422,7 @@ Status:
 | Send command reply | `MessagingService.sendText()` | `send-text` | `Confirmed` |
 | Send helpdesk notification | `MessagingService.sendText()` | `send-text` | `Confirmed` |
 | Store message id for claim flow | normalized outbound send result | `MessageResponseDto.messageId` | `Confirmed` |
-| Receive reaction for claim flow | `ReactionEvent` | `message.reaction` | `Unverified` |
+| Receive reaction for claim flow | `ReactionEvent` | `message.reaction` | `Inferred` |
 | Normalize LID/requester identity | `DirectoryService.resolvePhone()` | `/contacts/{contactId}/phone` | `Confirmed` |
 | Check registered number before send | `DirectoryService.checkNumber()` | `/contacts/check/{number}` | `Confirmed` |
 | Group-by-name resolution | `DirectoryService.listGroups()` + cache | `/groups` | `Confirmed` |

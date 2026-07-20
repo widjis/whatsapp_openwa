@@ -172,6 +172,7 @@ For new and updated tickets, the system may notify the requester based on webhoo
 Acceptance:
 - requester notification is best-effort
 - main receiver notification is not blocked by requester notification failure
+- requester contact resolution may fall back from ServiceDesk mobile to LDAP lookup by requester email
 
 #### HD-04 Optional technician notification
 When a ticket is assigned or reassigned to a technician, the system may notify that technician directly.
@@ -210,6 +211,7 @@ Acceptance:
 - the claim is idempotent
 - concurrent claim attempts do not produce multiple accepted owners
 - response message explains whether claim succeeded or was already taken
+- after a successful claim, direct technician and requester notifications may be sent as best-effort side effects
 
 #### HD-09 Unclaim behavior
 When the original claimer removes their reaction, the system must allow the claim to be removed and ticket ownership to revert according to stored previous state.

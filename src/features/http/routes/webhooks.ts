@@ -1,17 +1,40 @@
 import type { Express, Request, Response } from 'express';
 import { body, query, validationResult } from 'express-validator';
-import { normalizeInboundMessageEvent } from '../../channel/eventNormalizer.js';
+import {
+  normalizeOpenwaEvent,
+  type InboundMessageEvent,
+  type ReactionEvent,
+} from '../../channel/eventNormalizer.js';
 import { getDefaultWebhookEvents, type WebhookCaptureStore, type WebhookService } from '../../channel/webhookService.js';
-import type { InboundCommandService } from '../../inbound/commandService.js';
+
+type CommandProcessResult = {
+  handled: boolean;
+  commandName?: string;
+};
+
+type WebhookCommandService = {
+  processInboundMessage(event: InboundMessageEvent): Promise<CommandProcessResult>;
+  processReactionEvent(event: ReactionEvent): Promise<CommandProcessResult>;
+};
 
 type RegisterWebhookRoutesDeps = {
   app: Express;
   checkIp: (req: Request, res: Response, next: () => void) => void;
   captureStore: WebhookCaptureStore;
   webhookService: WebhookService;
-  commandService: InboundCommandService;
+  commandService: WebhookCommandService;
   defaultWebhookUrl?: string;
   defaultWebhookSecret?: string;
+};
+
+type ProcessWebhookPayloadArgs = {
+  payload: unknown;
+  headers: Record<string, string>;
+  path: string;
+  method: string;
+  remoteAddress: string;
+  captureStore: WebhookCaptureStore;
+  commandService: WebhookCommandService;
 };
 
 function toHeaderRecord(headers: Request['headers']): Record<string, string> {
@@ -25,6 +48,23 @@ function toHeaderRecord(headers: Request['headers']): Record<string, string> {
       out[key] = value.join(', ');
     }
   }
+  return out;
+}
+
+function toStringRecord(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const out: Record<string, string> = {};
+
+  for (const [key, raw] of Object.entries(value)) {
+    if (typeof raw === 'string') {
+      out[key] = raw;
+      continue;
+    }
+    if (typeof raw === 'number' || typeof raw === 'boolean') {
+      out[key] = String(raw);
+    }
+  }
+
   return out;
 }
 
@@ -50,6 +90,36 @@ function toRecord(value: unknown): Record<string, unknown> | null {
 
 function truncate(value: string, maxLength = 120): string {
   return value.length <= maxLength ? value : `${value.slice(0, maxLength - 3)}...`;
+}
+
+function formatLogValue(value: unknown): string {
+  if (value === undefined) return '-';
+  if (value === null) return '<null>';
+  if (typeof value === 'boolean') return value ? 'yes' : 'no';
+  if (Array.isArray(value)) {
+    const text = value.join(',');
+    return text.length <= 80 ? text : `${text.slice(0, 77)}...`;
+  }
+  if (typeof value === 'object') {
+    try {
+      const text = JSON.stringify(value);
+      return text.length <= 100 ? text : `${text.slice(0, 97)}...`;
+    } catch {
+      return '[object]';
+    }
+  }
+
+  const text = String(value).replace(/\s+/g, ' ').trim();
+  if (!text) return '""';
+  return text.length <= 100 ? text : `${text.slice(0, 97)}...`;
+}
+
+function formatLogLine(details: Record<string, unknown>, preferredOrder: string[] = []): string {
+  const keys = new Set<string>([...preferredOrder, ...Object.keys(details)]);
+  return Array.from(keys)
+    .filter((key) => key in details)
+    .map((key) => `${key}=${formatLogValue(details[key])}`)
+    .join(' | ');
 }
 
 function extractIncomingEventType(body: unknown): string | null {
@@ -95,62 +165,139 @@ function summarizeBody(body: unknown): Record<string, unknown> {
   };
 }
 
+function logWebhook(tag: string, details: Record<string, unknown>, preferredOrder: string[] = []): void {
+  console.log(tag, formatLogLine(details, preferredOrder));
+}
+
+async function processWebhookPayload(args: ProcessWebhookPayloadArgs): Promise<{
+  captured: {
+    captureId: string;
+    eventType: string | null;
+    sessionId: string | null;
+    capturedAt: string;
+  };
+  processed: CommandProcessResult;
+}> {
+  const incomingSummary = summarizeBody(args.payload);
+  logWebhook(
+    '[webhook:received]',
+    {
+      eventType: extractIncomingEventType(args.payload),
+      sessionId: extractIncomingSessionId(args.payload),
+      path: args.path,
+      method: args.method,
+      remoteAddress: args.remoteAddress,
+      chatId: incomingSummary.chatId,
+      senderId: incomingSummary.senderId,
+      messageId: incomingSummary.messageId,
+      textPreview: incomingSummary.textPreview,
+    },
+    ['eventType', 'sessionId', 'chatId', 'senderId', 'messageId', 'textPreview', 'path', 'method', 'remoteAddress']
+  );
+
+  const capture = await args.captureStore.save({
+    headers: args.headers,
+    payload: args.payload,
+  });
+  logWebhook(
+    '[webhook:capture_saved]',
+    {
+      eventType: capture.eventType,
+      sessionId: capture.sessionId,
+      captureId: capture.captureId,
+    },
+    ['eventType', 'sessionId', 'captureId']
+  );
+
+  const normalizedEvent = normalizeOpenwaEvent(args.payload);
+  if (normalizedEvent?.eventType === 'message.received') {
+    const normalizedMessage = normalizedEvent;
+    logWebhook(
+      '[webhook:normalized]',
+      {
+        eventType: normalizedMessage.eventType,
+        sessionId: normalizedMessage.sessionId,
+        chatId: normalizedMessage.chatId,
+        senderId: normalizedMessage.senderId,
+        isGroup: normalizedMessage.isGroup,
+        messageId: normalizedMessage.messageId,
+        textPreview: truncate(normalizedMessage.text),
+      },
+      ['eventType', 'sessionId', 'chatId', 'senderId', 'isGroup', 'messageId', 'textPreview']
+    );
+  } else if (normalizedEvent?.eventType === 'message.reaction') {
+    logWebhook(
+      '[webhook:normalized]',
+      {
+        eventType: normalizedEvent.eventType,
+        sessionId: normalizedEvent.sessionId,
+        chatId: normalizedEvent.chatId,
+        senderId: normalizedEvent.senderId,
+        senderPhone: normalizedEvent.senderPhone,
+        messageId: normalizedEvent.messageId,
+        emoji: normalizedEvent.emoji,
+        removed: normalizedEvent.removed,
+      },
+      ['eventType', 'sessionId', 'chatId', 'senderId', 'senderPhone', 'messageId', 'emoji', 'removed']
+    );
+  } else {
+    logWebhook(
+      '[webhook:normalize_skipped]',
+      {
+        eventType: extractIncomingEventType(args.payload),
+        sessionId: extractIncomingSessionId(args.payload),
+        chatId: incomingSummary.chatId,
+        senderId: incomingSummary.senderId,
+        messageId: incomingSummary.messageId,
+        textPreview: incomingSummary.textPreview,
+      },
+      ['eventType', 'sessionId', 'chatId', 'senderId', 'messageId', 'textPreview']
+    );
+  }
+
+  let processed: CommandProcessResult = { handled: false };
+  if (normalizedEvent?.eventType === 'message.received') {
+    processed = await args.commandService.processInboundMessage(normalizedEvent);
+  } else if (normalizedEvent?.eventType === 'message.reaction') {
+    processed = await args.commandService.processReactionEvent(normalizedEvent);
+  }
+  logWebhook(
+    '[webhook:processed]',
+    {
+      eventType: normalizedEvent?.eventType ?? extractIncomingEventType(args.payload),
+      handled: processed.handled,
+      commandName: processed.commandName ?? null,
+    },
+    ['eventType', 'handled', 'commandName']
+  );
+
+  return {
+    captured: {
+      captureId: capture.captureId,
+      eventType: capture.eventType,
+      sessionId: capture.sessionId,
+      capturedAt: capture.capturedAt,
+    },
+    processed,
+  };
+}
+
 export function registerWebhookRoutes(deps: RegisterWebhookRoutesDeps) {
   deps.app.post('/channel/webhooks/openwa', async (req: Request, res: Response) => {
     try {
-      console.log('[webhook:received]', JSON.stringify({
+      const result = await processWebhookPayload({
+        payload: req.body,
+        headers: toHeaderRecord(req.headers),
         path: req.path,
         method: req.method,
-        eventType: extractIncomingEventType(req.body),
-        sessionId: extractIncomingSessionId(req.body),
-        remoteAddress: req.ip,
-        summary: summarizeBody(req.body),
-      }));
-
-      const capture = await deps.captureStore.save({
-        headers: toHeaderRecord(req.headers),
-        payload: req.body,
+        remoteAddress: req.ip ?? '',
+        captureStore: deps.captureStore,
+        commandService: deps.commandService,
       });
-      console.log('[webhook:capture_saved]', JSON.stringify({
-        captureId: capture.captureId,
-        eventType: capture.eventType,
-        sessionId: capture.sessionId,
-      }));
-
-      const normalizedMessage = normalizeInboundMessageEvent(req.body);
-      if (normalizedMessage) {
-        console.log('[webhook:normalized]', JSON.stringify({
-          eventType: normalizedMessage.eventType,
-          sessionId: normalizedMessage.sessionId,
-          chatId: normalizedMessage.chatId,
-          senderId: normalizedMessage.senderId,
-          isGroup: normalizedMessage.isGroup,
-          messageId: normalizedMessage.messageId,
-          textPreview: truncate(normalizedMessage.text),
-        }));
-      } else {
-        console.log('[webhook:normalize_skipped]', JSON.stringify({
-          eventType: extractIncomingEventType(req.body),
-          summary: summarizeBody(req.body),
-        }));
-      }
-
-      const processed = normalizedMessage ? await deps.commandService.processInboundMessage(normalizedMessage) : { handled: false };
-      console.log('[webhook:processed]', JSON.stringify({
-        eventType: normalizedMessage?.eventType ?? extractIncomingEventType(req.body),
-        handled: processed.handled,
-        commandName: processed.commandName ?? null,
-      }));
-
       res.status(202).json({
         status: true,
-        captured: {
-          captureId: capture.captureId,
-          eventType: capture.eventType,
-          sessionId: capture.sessionId,
-          capturedAt: capture.capturedAt,
-        },
-        processed,
+        captured: result.captured,
+        processed: result.processed,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -193,6 +340,46 @@ export function registerWebhookRoutes(deps: RegisterWebhookRoutesDeps) {
         }
 
         res.status(200).json({ status: true, capture });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        res.status(500).json({ status: false, message });
+      }
+    }
+  );
+
+  deps.app.post(
+    '/channel/webhooks/test',
+    deps.checkIp,
+    [body('payload').custom((value) => value !== undefined).withMessage('payload is required'), body('headers').optional().isObject()],
+    async (req: Request, res: Response) => {
+      if (hasValidationError(req, res)) return;
+
+      try {
+        const bodyValue = req.body as {
+          payload: unknown;
+          headers?: Record<string, unknown>;
+        };
+
+        const result = await processWebhookPayload({
+          payload: bodyValue.payload,
+          headers: {
+            ...toHeaderRecord(req.headers),
+            ...toStringRecord(bodyValue.headers),
+            'x-webhook-test': 'true',
+          },
+          path: req.path,
+          method: req.method,
+          remoteAddress: req.ip ?? '',
+          captureStore: deps.captureStore,
+          commandService: deps.commandService,
+        });
+
+        res.status(202).json({
+          status: true,
+          mode: 'test',
+          captured: result.captured,
+          processed: result.processed,
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         res.status(500).json({ status: false, message });

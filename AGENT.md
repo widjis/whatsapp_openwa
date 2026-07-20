@@ -64,6 +64,9 @@ Recommended supporting documents include:
 Supporting documents do not replace the mandatory set. Add them when they reduce ambiguity or preserve important implementation and operational knowledge.
 
 ## Change Control Rules
+- Every backend change must include an explicit `docs/openapi.yaml` review.
+- If a backend change affects routes, payloads, headers, auth, validation, response codes, or integration contract behavior, update `docs/openapi.yaml` in the same work item.
+- Do not defer `docs/openapi.yaml` updates to a later cleanup task.
 - Do not change backend behavior without checking whether `docs/openapi.yaml` must change.
 - Do not change workflow, approval, statuses, or user-visible behavior without updating the related docs.
 - Do not close a phase until verification has passed.
@@ -102,6 +105,7 @@ When starting work:
 When finishing work:
 - summarize changed files
 - summarize updated docs
+- state whether `docs/openapi.yaml` was updated and, if not, why no contract change was required
 - state verification performed
 - state whether the roadmap/checklist was updated
 
@@ -116,6 +120,7 @@ If documentation conflicts:
 A task is done only if:
 - implementation is complete
 - relevant docs are updated
+- `docs/openapi.yaml` is updated for every applicable backend change
 - verification has passed
 - the executed roadmap checklist step has recorded challenge/verification evidence
 - roadmap/checklist reflects reality

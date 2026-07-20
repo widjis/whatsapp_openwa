@@ -15,6 +15,11 @@ Start here before implementing:
 - `docs/openwa-integration-contracts.md`
 - `docs/open-questions-and-challenges.md`
 - `docs/feature-specifications.md`
+- `docs/openapi.yaml`
+
+Backend contract rule:
+- every backend change must review `docs/openapi.yaml`
+- if the backend contract changes, update `docs/openapi.yaml` in the same task
 
 ## Current Phase
 See `docs/implementation-roadmap.md`.

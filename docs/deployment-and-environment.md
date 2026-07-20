@@ -81,6 +81,10 @@ Dispatcher-specific detail is documented further in `docs/dispatcher_setup.md`.
 
 ### SharePoint / leave schedule behavior
 - `LEAVE_SCHEDULE_SHARE_URL`
+- `LEAVE_SCHEDULE_AUTO_DOWNLOAD_ENABLED`
+- `LEAVE_SCHEDULE_AUTO_DOWNLOAD_TZ_OFFSET_HOURS`
+- `LEAVE_SCHEDULE_AUTO_DOWNLOAD_HOUR`
+- `LEAVE_SCHEDULE_AUTO_DOWNLOAD_MINUTE`
 - `MS_TENANT_ID`
 - `MS_CLIENT_ID`
 - `MS_GRAPH_SCOPES`

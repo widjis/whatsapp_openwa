@@ -33,25 +33,43 @@ Why it matters:
 - dedupe key generation
 
 What is still unknown:
-- exact field names for target `messageId`
-- exact field names for target `chatId`
-- whether sender identity is always directly available
+- exact removal representation when a reaction is removed
+- whether sender identity is always directly available outside the currently captured samples
+
+What is now confirmed from runtime evidence:
+- OpenWA emits `message.reaction` with `payload.data.messageId`
+- OpenWA emits `payload.data.chatId`
+- reacting actor is exposed at `payload.data.senderId`
+- active reaction emoji is exposed at `payload.data.reaction`
+- current actor-to-emoji snapshot is exposed at `payload.data.reactions`
+- current captured samples do not include a stable phone field for the reacting actor, so `@lid` actors still require explicit resolution
 
 Evidence needed:
-- real webhook payload samples for both claim and unclaim scenarios
+- real webhook payload sample for unclaim / reaction removal scenario
+- additional payload samples if actor identity ever appears under a different field shape
+
+Evidence captured so far:
+- `data/webhook-captures/32ef5424-31fd-4b02-9508-f846f2a29c7b.json`
+- `data/webhook-captures/cc5f5de5-5a55-42de-979f-466f168a9390.json`
+- `data/webhook-captures/ce56abc3-a1e3-4e5e-bde5-a47c2f793b9b.json`
 
 ### OQ-03 Reaction removal semantics
 Status:
-- Open
+- Resolved
 
 Why it matters:
 - the rebuilt claim workflow must distinguish claim vs unclaim reliably
 
-What is still unknown:
-- whether OpenWA represents removed reactions as empty string, null, missing field, or a distinct event shape
+Resolved understanding:
+- OpenWA represents removed reactions on `message.reaction` as `payload.data.reaction = ""`
+- canonical normalization can treat an empty-string reaction as `removed: true`
 
-Evidence needed:
-- captured removal payload from a real session
+Confirming evidence:
+- terminal runtime log for capture id `be99c563-6ee5-4173-a088-c402bbc832ac`
+- normalized event summary showed `emoji: ""` and `removed: true`
+
+Design implication:
+- claim and unclaim can share one webhook event family (`message.reaction`) and branch on the normalized `removed` flag
 
 ### OQ-04 Outbound `messageId` correlation stability
 Status:
@@ -78,10 +96,21 @@ Why it matters:
 - parity with the reference behavior
 
 What is still unknown:
-- whether webhook payloads include direct media URLs, IDs, metadata only, or require additional history fetches
+- whether audio and video follow the same inline payload model as the captured image and document samples
+
+What is now confirmed from runtime evidence:
+- image webhook payloads can include `payload.data.media.data` inline as base64
+- image webhook payloads include `payload.data.media.mimetype`
+- document webhook payloads can include inline base64 plus `payload.data.media.filename`
+- current image/document samples do not require an additional history fetch to access media bytes
 
 Evidence needed:
-- real inbound image/video/audio/document webhook samples
+- real inbound audio webhook sample
+- real inbound video webhook sample
+
+Evidence captured so far:
+- image sample: `data/webhook-captures/19d5c9dd-ad1d-46c7-a160-f1fe093f55cc.json`
+- document sample: `data/webhook-captures/567f236b-4b8b-4e96-952e-4b3ac08620b7.json`
 
 ### OQ-06 Session event payload detail
 Status:
@@ -93,11 +122,21 @@ Why it matters:
 - disconnect diagnostics
 
 What is still unknown:
-- which fields are present on `session.status`, `session.qr`, `session.authenticated`, and `session.disconnected`
+- exact payload shape for `session.qr`
+- exact payload shape for `session.disconnected`
 - whether QR webhook payloads are sufficient directly or whether the app must call `GET /sessions/{id}/qr`
 
+What is now confirmed from runtime evidence:
+- `session.status` sample includes `payload.data.sessionId` and `payload.data.status`
+- `session.authenticated` sample includes `payload.data.sessionId`, `payload.data.phone`, and `payload.data.pushName`
+
 Evidence needed:
-- real captured session webhook events
+- real captured `session.qr` webhook event
+- real captured `session.disconnected` webhook event
+
+Evidence captured so far:
+- `session.status`: `data/webhook-captures/281bbe50-94b8-4a89-a43a-34b1e9240d1f.json`
+- `session.authenticated`: `data/webhook-captures/d2c89b4b-2b97-4dc8-811b-5fb33d8f1692.json`
 
 ### OQ-07 Webhook secret/signature format
 Status:

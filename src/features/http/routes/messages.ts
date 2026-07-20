@@ -4,6 +4,18 @@ import { body, validationResult } from 'express-validator'
 import type { Multer } from 'multer'
 import type { DirectoryService } from '../../channel/directoryService.js'
 import type { MessagingService } from '../../channel/messagingService.js'
+import {
+  assignTechnicianToRequest,
+  buildTicketLink,
+  defineServiceCategory,
+  updateRequest,
+  viewRequest,
+  type ServiceDeskRequest,
+} from '../../integrations/serviceDesk.js'
+import { getContactByIctTechnicianName } from '../../integrations/technicianContacts.js'
+import { findUserMobileByEmail } from '../../integrations/ldap.js'
+import { storeTicketNotification } from '../../tickets/claimStore.js'
+import { loadPreviousTicketState, saveTicketState } from '../../tickets/ticketStateStore.js'
 import { ensureMentionJid, phoneNumberFormatter } from '../../../utils/phone.js'
 
 type RegisterMessageRoutesDeps = {
@@ -41,22 +53,20 @@ type UploadedFile = {
   mimetype?: string
 }
 
-type GroupCacheEntry = {
-  id: string
-  subject: string
-  subjectLower: string
-}
-
 type GroupResolveResult =
   | { ok: true; chatId: string }
   | { ok: false; reason: 'not_found' | 'error'; message: string }
 
-let groupCache:
-  | {
-      fetchedAtMs: number
-      entries: GroupCacheEntry[]
-    }
-  | null = null
+type WebhookBody = {
+  id: string
+  status: 'new' | 'updated'
+  receiver: string
+  receiver_type: string
+  notify_requester_new?: string
+  notify_requester_update?: string
+  notify_requester_assign?: string
+  notify_technician?: string
+}
 
 function pickUploadedFile(files: unknown, fieldName: string): UploadedFile | undefined {
   if (!files || typeof files !== 'object') return undefined
@@ -117,20 +127,183 @@ function resolveDocumentMimeType(file: UploadedFile): string {
   return file.mimetype ?? 'application/octet-stream'
 }
 
-async function fetchGroupCache(directory: DirectoryService) {
-  const groups = await directory.listGroups()
-  const entries = groups.map((group) => ({
-    id: group.id,
-    subject: group.subject,
-    subjectLower: group.subject.toLowerCase(),
-  }))
+function isWebhookBody(input: unknown): input is WebhookBody {
+  if (!input || typeof input !== 'object') return false
+  const record = input as Record<string, unknown>
+  return (
+    typeof record.id === 'string' &&
+    record.id.trim().length > 0 &&
+    (record.status === 'new' || record.status === 'updated') &&
+    typeof record.receiver === 'string' &&
+    record.receiver.trim().length > 0 &&
+    typeof record.receiver_type === 'string' &&
+    record.receiver_type.trim().length > 0
+  )
+}
 
-  groupCache = {
-    fetchedAtMs: Date.now(),
-    entries,
-  }
+function shouldNotify(raw: string | undefined, defaultValue = false): boolean {
+  if (!raw) return defaultValue
+  return raw === 'true'
+}
 
-  return groupCache
+function normalizeReceiverJid(receiver: string): string {
+  const trimmed = receiver.trim()
+  if (trimmed.includes('@')) return trimmed
+  return phoneNumberFormatter(trimmed)
+}
+
+function stripHtmlToText(value: string): string {
+  return value.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+function truncateDescription(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text
+  return `${text.slice(0, Math.max(0, maxChars - 3))}...`
+}
+
+function renderKeyValueLines(rows: Array<{ label: string; value: string }>): string {
+  return rows.map((row) => `${row.label}: ${row.value}`).join('\n')
+}
+
+function getRequesterLabel(request: ServiceDeskRequest): string {
+  const name = request.requester?.name?.trim()
+  const email = request.requester?.email_id?.trim()
+  if (name && email) return `${name} (${email})`
+  if (name) return name
+  if (email) return email
+  return 'Unknown requester'
+}
+
+async function resolveRequesterJid(request: ServiceDeskRequest): Promise<string | null> {
+  const direct = request.requester?.mobile?.trim()
+  if (direct) return phoneNumberFormatter(direct)
+
+  const email = request.requester?.email_id?.trim()
+  if (!email) return null
+
+  const ldapMobile = await findUserMobileByEmail({ email })
+  return ldapMobile ? phoneNumberFormatter(ldapMobile) : null
+}
+
+function renderTicketNewMessage(args: {
+  requesterLabel: string
+  createdDate: string
+  ticketId: string
+  category: string
+  priority: string
+  status: string
+  subject: string
+  description: string
+  link: string
+}): string {
+  return `*New request from ${args.requesterLabel} on ${args.createdDate}*\n\n${renderKeyValueLines([
+    { label: 'Ticket ID', value: args.ticketId },
+    { label: 'Status', value: args.status },
+    { label: 'Priority', value: args.priority },
+    { label: 'Category', value: args.category },
+    { label: 'Subject', value: args.subject },
+    { label: 'Description', value: args.description },
+    { label: 'Link', value: args.link },
+  ])}`
+}
+
+function renderTicketUpdateMessage(args: {
+  ticketId: string
+  requesterLabel: string
+  category: string
+  priority: string
+  status: string
+  subject: string
+  link: string
+  changes: string[]
+}): string {
+  const base = renderKeyValueLines([
+    { label: 'Ticket ID', value: args.ticketId },
+    { label: 'Requester', value: args.requesterLabel },
+    { label: 'Status', value: args.status },
+    { label: 'Priority', value: args.priority },
+    { label: 'Category', value: args.category },
+    { label: 'Subject', value: args.subject },
+  ])
+  const changeLines = args.changes.length > 0 ? `\n\nChanges:\n${args.changes.map((item) => `- ${item}`).join('\n')}` : ''
+  return `*Ticket Updated*\n\n${base}${changeLines}\n\nLink: ${args.link}`
+}
+
+function renderRequesterTicketCreatedMessage(args: {
+  requesterLabel: string
+  ticketId: string
+  status: string
+  priority: string
+  category: string
+  subject: string
+  description: string
+  link: string
+}): string {
+  return `Dear *${args.requesterLabel}*,\n\nYour request has been created successfully.\n\n${renderKeyValueLines([
+    { label: 'Ticket ID', value: args.ticketId },
+    { label: 'Status', value: args.status },
+    { label: 'Priority', value: args.priority },
+    { label: 'Category', value: args.category },
+    { label: 'Subject', value: args.subject },
+    { label: 'Description', value: args.description },
+    { label: 'Link', value: args.link },
+  ])}\n\nThank you.`
+}
+
+function renderRequesterTicketUpdatedMessage(args: {
+  requesterLabel: string
+  ticketId: string
+  link: string
+  changes: string[]
+}): string {
+  const changeLines = args.changes.length > 0 ? `\n\nChanges:\n${args.changes.map((item) => `- ${item}`).join('\n')}` : ''
+  return `Dear *${args.requesterLabel}*,\n\nYour ticket has been updated.\n\nTicket ID: ${args.ticketId}${changeLines}\n\nLink: ${args.link}`
+}
+
+function renderRequesterTicketAssignedMessage(args: {
+  requesterLabel: string
+  ticketId: string
+  assigneeName: string
+  link: string
+}): string {
+  return `Dear *${args.requesterLabel}*,\n\nYour ticket has been assigned to *${args.assigneeName}*.\n\nTicket ID: ${args.ticketId}\n\nLink: ${args.link}`
+}
+
+function renderTicketAssignedToTechnicianMessage(args: {
+  ticketId: string
+  requesterLabel: string
+  category: string
+  priority: string
+  status: string
+  subject: string
+  description: string
+  link: string
+}): string {
+  return `*Ticket assigned to you*\n\n${renderKeyValueLines([
+    { label: 'Ticket ID', value: args.ticketId },
+    { label: 'Requester', value: args.requesterLabel },
+    { label: 'Status', value: args.status },
+    { label: 'Priority', value: args.priority },
+    { label: 'Category', value: args.category },
+    { label: 'Subject', value: args.subject },
+    { label: 'Description', value: args.description },
+    { label: 'Link', value: args.link },
+  ])}`
+}
+
+function determineGroupByTechnicianRole(role: string): string {
+  const normalized = role.toLowerCase()
+  if (normalized.includes('document control')) return 'ICT Document Controller'
+  if (normalized.includes('it field support')) return 'ICT Network and Infrastructure'
+  return 'ICT System and Support'
+}
+
+function isClosedStatusName(value: string | null | undefined): boolean {
+  const normalized = value?.trim().toLowerCase() ?? ''
+  if (!normalized) return false
+  return ['resolved', 'closed', 'cancelled', 'canceled'].some((prefix) => {
+    return normalized === prefix || normalized.startsWith(`${prefix} `) || normalized.startsWith(`${prefix}-`)
+  })
 }
 
 async function resolveGroupChatId(args: {
@@ -145,11 +318,14 @@ async function resolveGroupChatId(args: {
   const query = (args.name ?? '').trim()
   if (!query) return { ok: false, reason: 'not_found', message: 'Missing group id or name' }
 
-  const ttlMs = 5 * 60 * 1000
-  const currentCache = groupCache && Date.now() - groupCache.fetchedAtMs <= ttlMs ? groupCache : await fetchGroupCache(args.directory)
-  const match = currentCache.entries.find((entry) => entry.subjectLower.includes(query.toLowerCase()))
-  if (!match) return { ok: false, reason: 'not_found', message: `No group found with name: ${query}` }
-  return { ok: true, chatId: match.id }
+  try {
+    const groupId = await args.directory.resolveGroupIdByName(query)
+    if (!groupId) return { ok: false, reason: 'not_found', message: `No group found with name: ${query}` }
+    return { ok: true, chatId: groupId }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return { ok: false, reason: 'error', message }
+  }
 }
 
 export function registerMessageRoutes(deps: RegisterMessageRoutesDeps) {
@@ -332,4 +508,299 @@ export function registerMessageRoutes(deps: RegisterMessageRoutesDeps) {
       }
     }
   )
+
+  deps.app.post('/webhook', deps.checkIp, async (req: Request, res: Response) => {
+    if (!isWebhookBody(req.body)) {
+      res.status(400).json({ error: 'Invalid payload' })
+      return
+    }
+
+    try {
+      const payload = req.body
+      const request = await viewRequest(payload.id)
+      if (!request) {
+        res.status(404).json({ error: 'Request not found' })
+        return
+      }
+
+      const receiverJid = normalizeReceiverJid(payload.receiver)
+      const requesterLabel = getRequesterLabel(request)
+      const ticketStatus = request.status?.name?.trim() || 'N/A'
+      const subject = request.subject?.trim() || 'No subject'
+      const createdDate = request.created_time?.display_value?.trim() || 'N/A'
+      const descriptionPlain = stripHtmlToText(request.description ?? '')
+      const truncatedDescription = truncateDescription(descriptionPlain, 200)
+      const ticketLink = buildTicketLink(request.id)
+      const requesterJid = await resolveRequesterJid(request)
+
+      if (payload.status === 'new') {
+        let categoryForMessage = request.service_category?.name?.trim() || 'N/A'
+        let priorityForMessage = request.priority?.name?.trim() || 'N/A'
+        const updateArgs: {
+          templateId?: string
+          templateName?: string
+          isServiceTemplate?: boolean
+          serviceCategory?: string
+          priority?: string
+        } = {}
+
+        if ((request.template?.id ?? '') !== '305') {
+          updateArgs.templateId = '305'
+          updateArgs.templateName = 'Submit a New Request'
+          updateArgs.isServiceTemplate = false
+        }
+        if (categoryForMessage === 'N/A') {
+          const suggestedCategory = await defineServiceCategory(request.id)
+          if (suggestedCategory) updateArgs.serviceCategory = suggestedCategory
+        }
+        if (priorityForMessage === 'N/A') {
+          updateArgs.priority = 'Low'
+        }
+
+        if (Object.keys(updateArgs).length > 0) {
+          const updateResult = await updateRequest(request.id, updateArgs)
+          if (!updateResult.success) {
+            console.warn(`Ticket update (new) failed for ${request.id}: ${updateResult.message}`)
+          } else {
+            const refreshed = await viewRequest(request.id)
+            if (refreshed?.service_category?.name?.trim()) categoryForMessage = refreshed.service_category.name.trim()
+            else if (updateArgs.serviceCategory) categoryForMessage = updateArgs.serviceCategory
+            if (refreshed?.priority?.name?.trim()) priorityForMessage = refreshed.priority.name.trim()
+            else if (updateArgs.priority) priorityForMessage = updateArgs.priority
+          }
+        }
+
+        const messageText = renderTicketNewMessage({
+          requesterLabel,
+          createdDate,
+          ticketId: request.id,
+          category: categoryForMessage,
+          priority: priorityForMessage,
+          status: ticketStatus,
+          subject,
+          description: truncatedDescription,
+          link: ticketLink,
+        })
+
+        let receiverSent = false
+        let receiverError: string | null = null
+        try {
+          const sent = await deps.messaging.sendText({ chatId: receiverJid, text: messageText })
+          receiverSent = true
+          if (sent.messageId) {
+            await storeTicketNotification({
+              ticketId: request.id,
+              remoteJid: sent.remoteJid ?? receiverJid,
+              messageId: sent.messageId,
+            })
+          }
+        } catch (error) {
+          receiverError = error instanceof Error ? error.message : String(error)
+          console.error(`Receiver notify (new) failed for ${request.id}: ${receiverError}`)
+        }
+
+        if (shouldNotify(payload.notify_requester_new, true) && requesterJid) {
+          const requesterMessage = renderRequesterTicketCreatedMessage({
+            requesterLabel,
+            ticketId: request.id,
+            status: ticketStatus,
+            priority: priorityForMessage,
+            category: categoryForMessage,
+            subject,
+            description: truncatedDescription,
+            link: ticketLink,
+          })
+
+          try {
+            await deps.messaging.sendText({ chatId: requesterJid, text: requesterMessage })
+          } catch (error) {
+            console.error(
+              `Requester notify (new) failed for ${request.id}: ${error instanceof Error ? error.message : String(error)}`
+            )
+          }
+        }
+
+        await saveTicketState(request.id, {
+          technician: request.udf_fields?.udf_pick_601 ?? undefined,
+          ticketStatus,
+          priority: priorityForMessage,
+        })
+
+        res.status(200).json({ status: true, message: 'Webhook processed', receiverSent, receiverError })
+        return
+      }
+
+      let categoryForMessage = request.service_category?.name?.trim() || 'N/A'
+      let priorityForMessage = request.priority?.name?.trim() || 'N/A'
+      const updateArgs: { serviceCategory?: string; priority?: string } = {}
+      if (categoryForMessage === 'N/A') {
+        const suggestedCategory = await defineServiceCategory(request.id)
+        if (suggestedCategory) updateArgs.serviceCategory = suggestedCategory
+      }
+      if (priorityForMessage === 'N/A') {
+        updateArgs.priority = 'Low'
+      }
+
+      if (Object.keys(updateArgs).length > 0) {
+        const updateResult = await updateRequest(request.id, updateArgs)
+        if (!updateResult.success) {
+          console.warn(`Ticket update (updated) failed for ${request.id}: ${updateResult.message}`)
+        } else {
+          const refreshed = await viewRequest(request.id)
+          if (refreshed?.service_category?.name?.trim()) categoryForMessage = refreshed.service_category.name.trim()
+          else if (updateArgs.serviceCategory) categoryForMessage = updateArgs.serviceCategory
+          if (refreshed?.priority?.name?.trim()) priorityForMessage = refreshed.priority.name.trim()
+          else if (updateArgs.priority) priorityForMessage = updateArgs.priority
+        }
+      }
+
+      const previousState = await loadPreviousTicketState(request.id)
+      const currentTechnician = request.udf_fields?.udf_pick_601?.trim()
+      let ticketStatusForMessage = ticketStatus
+
+      const shouldAutoInProgress =
+        !isClosedStatusName(ticketStatusForMessage) &&
+        !isClosedStatusName(previousState?.ticketStatus) &&
+        previousState !== null &&
+        Boolean(currentTechnician) &&
+        currentTechnician !== 'ICT Helpdesk' &&
+        previousState.technician !== currentTechnician
+
+      if (shouldAutoInProgress && ticketStatusForMessage !== 'In Progress') {
+        const updateResult = await updateRequest(request.id, { status: 'In Progress' })
+        if (!updateResult.success) {
+          console.warn(`Ticket status update failed for ${request.id}: ${updateResult.message}`)
+        } else {
+          const refreshed = await viewRequest(request.id)
+          ticketStatusForMessage = refreshed?.status?.name?.trim() || 'In Progress'
+        }
+      }
+
+      const changes: string[] = []
+      if (previousState?.ticketStatus && previousState.ticketStatus !== ticketStatusForMessage) {
+        changes.push(`Status: ${previousState.ticketStatus} -> ${ticketStatusForMessage}`)
+      } else {
+        changes.push(`Status: ${ticketStatusForMessage}`)
+      }
+      if (previousState?.priority && previousState.priority !== priorityForMessage) {
+        changes.push(`Priority: ${previousState.priority} -> ${priorityForMessage}`)
+      } else {
+        changes.push(`Priority: ${priorityForMessage}`)
+      }
+      if (previousState?.technician && previousState.technician !== (currentTechnician ?? '')) {
+        changes.push(`Technician: ${previousState.technician} -> ${currentTechnician ?? 'Unassigned'}`)
+      } else if (currentTechnician) {
+        changes.push(`Technician: ${currentTechnician}`)
+      }
+
+      let receiverSent = false
+      let receiverError: string | null = null
+      try {
+        await deps.messaging.sendText({
+          chatId: receiverJid,
+          text: renderTicketUpdateMessage({
+            ticketId: request.id,
+            requesterLabel,
+            category: categoryForMessage,
+            priority: priorityForMessage,
+            status: ticketStatusForMessage,
+            subject,
+            link: ticketLink,
+            changes,
+          }),
+        })
+        receiverSent = true
+      } catch (error) {
+        receiverError = error instanceof Error ? error.message : String(error)
+        console.error(`Receiver notify (updated) failed for ${request.id}: ${receiverError}`)
+      }
+
+      if (shouldNotify(payload.notify_requester_update) && requesterJid) {
+        try {
+          await deps.messaging.sendText({
+            chatId: requesterJid,
+            text: renderRequesterTicketUpdatedMessage({
+              requesterLabel,
+              ticketId: request.id,
+              link: ticketLink,
+              changes,
+            }),
+          })
+        } catch (error) {
+          console.error(
+            `Requester notify (updated) failed for ${request.id}: ${error instanceof Error ? error.message : String(error)}`
+          )
+        }
+      }
+
+      if (
+        currentTechnician &&
+        currentTechnician !== 'ICT Helpdesk' &&
+        previousState?.technician !== currentTechnician &&
+        shouldNotify(payload.notify_technician)
+      ) {
+        const technicianContact = getContactByIctTechnicianName(currentTechnician)
+        if (technicianContact) {
+          const assignResult = await assignTechnicianToRequest({
+            requestId: request.id,
+            groupName: determineGroupByTechnicianRole(technicianContact.technician),
+            technicianName: technicianContact.technician,
+          })
+          if (!assignResult.success) {
+            console.warn(`ServiceDesk assign technician failed for ${request.id}: ${assignResult.message}`)
+          }
+
+          try {
+            await deps.messaging.sendText({
+              chatId: phoneNumberFormatter(technicianContact.phone),
+              text: renderTicketAssignedToTechnicianMessage({
+                ticketId: request.id,
+                requesterLabel,
+                category: categoryForMessage,
+                priority: priorityForMessage,
+                status: ticketStatusForMessage,
+                subject,
+                description: truncatedDescription,
+                link: ticketLink,
+              }),
+            })
+          } catch (error) {
+            console.error(
+              `Technician notify failed for ${request.id}: ${error instanceof Error ? error.message : String(error)}`
+            )
+          }
+
+          if (shouldNotify(payload.notify_requester_assign) && requesterJid) {
+            try {
+              await deps.messaging.sendText({
+                chatId: requesterJid,
+                text: renderRequesterTicketAssignedMessage({
+                  requesterLabel,
+                  ticketId: request.id,
+                  assigneeName: technicianContact.name,
+                  link: ticketLink,
+                }),
+              })
+            } catch (error) {
+              console.error(
+                `Requester assign notify failed for ${request.id}: ${error instanceof Error ? error.message : String(error)}`
+              )
+            }
+          }
+        }
+      }
+
+      await saveTicketState(request.id, {
+        technician: currentTechnician,
+        ticketStatus: ticketStatusForMessage,
+        priority: priorityForMessage,
+      })
+
+      res.status(200).json({ status: true, message: 'Webhook processed', receiverSent, receiverError })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error(`ServiceDesk webhook failed: ${message}`)
+      res.status(500).json({ status: false, message })
+    }
+  })
 }

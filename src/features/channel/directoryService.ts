@@ -85,7 +85,21 @@ function parseGroupMetadata(payload: unknown): GroupMetadata | null {
   return { announce, participants };
 }
 
+type GroupCacheSnapshot = {
+  fetchedAtMs: number;
+  entries: GroupSummary[];
+};
+
+function readPositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  const parsed = raw ? Number(raw) : Number.NaN;
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.floor(parsed);
+}
+
 export class DirectoryService {
+  private groupCache: GroupCacheSnapshot | null = null;
+
   constructor(private readonly client: OpenwaClient) {}
 
   async checkRegisteredNumber(value: string): Promise<boolean> {
@@ -97,10 +111,22 @@ export class DirectoryService {
     return parseCheckRegistered(payload);
   }
 
-  async listGroups(): Promise<GroupSummary[]> {
+  async listGroups(options?: { forceRefresh?: boolean }): Promise<GroupSummary[]> {
+    const ttlMs = readPositiveIntEnv('OPENWA_GROUP_CACHE_TTL_MS', 5 * 60 * 1000);
+    const forceRefresh = options?.forceRefresh === true;
+    const cacheStillValid = this.groupCache && Date.now() - this.groupCache.fetchedAtMs <= ttlMs;
+    if (!forceRefresh && cacheStillValid) {
+      return this.groupCache!.entries;
+    }
+
     const sessionId = await this.client.resolveSessionId();
     const payload = await this.client.get<unknown>(`/api/sessions/${encodeURIComponent(sessionId)}/groups`);
-    return parseGroups(payload);
+    const entries = parseGroups(payload);
+    this.groupCache = {
+      fetchedAtMs: Date.now(),
+      entries,
+    };
+    return entries;
   }
 
   async getGroupMetadata(groupId: string): Promise<GroupMetadata | null> {
@@ -109,6 +135,26 @@ export class DirectoryService {
       `/api/sessions/${encodeURIComponent(sessionId)}/groups/${encodeURIComponent(groupId)}`
     );
     return parseGroupMetadata(payload);
+  }
+
+  invalidateGroupsCache(): void {
+    this.groupCache = null;
+  }
+
+  async resolveGroupIdByName(name: string): Promise<string | null> {
+    const query = name.trim().toLowerCase();
+    if (!query) return null;
+
+    const findMatch = (groups: GroupSummary[]): GroupSummary | undefined =>
+      groups.find((group) => group.subject.toLowerCase().includes(query));
+
+    const cached = await this.listGroups();
+    const cachedMatch = findMatch(cached);
+    if (cachedMatch) return cachedMatch.id;
+
+    const refreshed = await this.listGroups({ forceRefresh: true });
+    const refreshedMatch = findMatch(refreshed);
+    return refreshedMatch?.id ?? null;
   }
 
   async resolvePhone(contactId: string): Promise<string | null> {

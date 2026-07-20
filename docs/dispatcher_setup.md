@@ -147,6 +147,59 @@ These define the ServiceDesk “Group” names that the dispatcher will set on t
 - Type: integer
 - Purpose: Limit how many per-ticket items are included in logs per run.
 
+## Leave Schedule Auto-Download
+
+These settings control the startup and scheduled download of the leave schedule workbook from SharePoint / OneDrive.
+
+### LEAVE_SCHEDULE_SHARE_URL
+- Type: URL
+- Purpose: Share URL of the workbook to download.
+- Notes:
+  - If unset, the auto-download scheduler stays idle.
+
+### LEAVE_SCHEDULE_AUTO_DOWNLOAD_ENABLED
+- Type: boolean
+- Purpose: Enable/disable the leave schedule download scheduler.
+- Behavior:
+  - `false`: disables both startup download and scheduled download ticks.
+
+### LEAVE_SCHEDULE_AUTO_DOWNLOAD_RUN_ON_STARTUP
+- Type: boolean
+- Purpose: Trigger one immediate download when the app starts.
+- Notes:
+  - Useful after deployments or restarts so the latest workbook is available before the first scheduled tick.
+
+### LEAVE_SCHEDULE_AUTO_DOWNLOAD_TZ_OFFSET_HOURS
+- Type: integer
+- Purpose: Time zone offset used to decide the local day for once-per-day download behavior.
+- Example:
+  - `8` for WITA-style UTC+8 handling.
+
+### LEAVE_SCHEDULE_AUTO_DOWNLOAD_HOUR
+- Type: integer (0..23)
+- Purpose: Local-hour schedule for the daily download.
+
+### LEAVE_SCHEDULE_AUTO_DOWNLOAD_MINUTE
+- Type: integer (0..59)
+- Purpose: Local-minute schedule for the daily download.
+
+### SHAREPOINT_TOKEN_CACHE_PATH
+- Type: path
+- Purpose: Token cache file used for Microsoft device-code / refresh-token reuse.
+- Notes:
+  - If unset, the app uses `DATA_DIR/sharepoint_token_cache.json`.
+
+### DISPATCHER_LEAVE_SCHEDULE_XLSX_PATH
+- Type: path
+- Purpose: Download target path and dispatcher workbook read path.
+- Current project default:
+  - `data/leave/leave-schedule.xlsx`
+
+### MS_TENANT_ID / MS_CLIENT_ID / MS_GRAPH_SCOPES
+- Purpose: Microsoft Graph authentication settings required for SharePoint download.
+- Notes:
+  - `MS_GRAPH_SCOPES` defaults to `Files.Read` when unset.
+
 ## Technician Assignment Controls
 
 These settings control which ICT technicians can be selected when the dispatcher assigns `udf_pick_601`.
