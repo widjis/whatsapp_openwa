@@ -42,3 +42,11 @@ Reproduce the reference behavior, but do not copy transport-specific debt into t
 - Multi instance (separate data dirs):
   - `docker compose -f docker-compose.multi.yml up --build`
   - Exposes `8192` and `8193`
+
+## Runtime Logs
+- Default log directory: `DATA_DIR/logs`
+- Default log file naming: `app-YYYY-MM-DD.log`
+- Debug API (IP-guarded by `ALLOWED_IPS`):
+  - `GET /debug/logs/files`
+  - `GET /debug/logs?lines=200`
+  - `GET /debug/logs?file=app-2026-07-21.log&lines=300`

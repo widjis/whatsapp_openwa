@@ -25,6 +25,7 @@ tags:
   - name: Messages
   - name: Channel
   - name: Webhooks
+  - name: Debug
 components:
   parameters:
     XForwardedFor:
@@ -52,6 +53,23 @@ components:
       required: true
       schema:
         type: string
+    DebugLogFile:
+      name: file
+      in: query
+      required: false
+      schema:
+        type: string
+      description: Optional log file name such as `app-2026-07-21.log`.
+    DebugLogLines:
+      name: lines
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 2000
+        default: 200
+      description: Number of most recent log lines to return.
   schemas:
     StatusEnvelope:
       type: object
@@ -377,6 +395,61 @@ components:
             mode:
               type: string
               const: test
+    DebugLogFileInfo:
+      type: object
+      properties:
+        name:
+          type: string
+        path:
+          type: string
+        sizeBytes:
+          type: integer
+        modifiedAt:
+          type: string
+          format: date-time
+      required:
+        - name
+        - path
+        - sizeBytes
+        - modifiedAt
+    DebugLogFilesResponse:
+      allOf:
+        - $ref: '#/components/schemas/StatusEnvelope'
+        - type: object
+          properties:
+            status:
+              const: true
+            directory:
+              type: string
+            files:
+              type: array
+              items:
+                $ref: '#/components/schemas/DebugLogFileInfo'
+          required:
+            - directory
+            - files
+    DebugLogTailResponse:
+      allOf:
+        - $ref: '#/components/schemas/StatusEnvelope'
+        - type: object
+          properties:
+            status:
+              const: true
+            fileName:
+              type: string
+            filePath:
+              type: string
+            lineCount:
+              type: integer
+            lines:
+              type: array
+              items:
+                type: string
+          required:
+            - fileName
+            - filePath
+            - lineCount
+            - lines
   responses:
     Forbidden:
       description: Caller IP is not in the server allowlist.
@@ -833,6 +906,51 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /debug/logs/files:
+    get:
+      tags: [Debug]
+      summary: List available runtime log files
+      description: >
+        Admin-only helper endpoint for operational troubleshooting. Returns the
+        current runtime log directory and recent daily log files.
+      parameters:
+        - $ref: '#/components/parameters/XForwardedFor'
+      responses:
+        '200':
+          description: Runtime log file list returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DebugLogFilesResponse'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /debug/logs:
+    get:
+      tags: [Debug]
+      summary: Read the most recent lines from a runtime log file
+      description: >
+        Admin-only helper endpoint that returns the latest lines from the
+        current daily log file by default, or from a specific log file when the
+        optional `file` query parameter is provided.
+      parameters:
+        - $ref: '#/components/parameters/XForwardedFor'
+        - $ref: '#/components/parameters/DebugLogFile'
+        - $ref: '#/components/parameters/DebugLogLines'
+      responses:
+        '200':
+          description: Runtime log lines returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DebugLogTailResponse'
         '403':
           $ref: '#/components/responses/Forbidden'
         '422':

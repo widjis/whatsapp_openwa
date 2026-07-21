@@ -5,9 +5,12 @@ export type AppConfig = {
   allowedIps: string[];
   allowedPhoneNumbers: string[];
   dataDir: string;
-  notifications: {
-    openwaConnectedNumber?: string;
-    sessionPollIntervalMs: number;
+  logging: {
+    enabled: boolean;
+    directory: string;
+    captureConsole: boolean;
+    maxFiles: number;
+    debugEndpointEnabled: boolean;
   };
   n8n: {
     enabled: boolean;
@@ -68,9 +71,14 @@ export function loadConfig(projectRoot: string): AppConfig {
     allowedIps: parseAllowedIps(process.env.ALLOWED_IPS),
     allowedPhoneNumbers: parseCsv(process.env.ALLOWED_PHONE_NUMBERS),
     dataDir: path.isAbsolute(dataDirRaw) ? dataDirRaw : path.join(projectRoot, dataDirRaw),
-    notifications: {
-      openwaConnectedNumber: parseOptional(process.env.OPENWA_NUMBER_TEST),
-      sessionPollIntervalMs: parsePort(process.env.OPENWA_SESSION_POLL_INTERVAL_MS, 5_000),
+    logging: {
+      enabled: parseBoolean(process.env.LOGGING_ENABLED) ?? true,
+      directory: path.isAbsolute(parseOptional(process.env.LOGGING_DIR) ?? '')
+        ? (parseOptional(process.env.LOGGING_DIR) as string)
+        : path.join(path.isAbsolute(dataDirRaw) ? dataDirRaw : path.join(projectRoot, dataDirRaw), parseOptional(process.env.LOGGING_DIR) ?? 'logs'),
+      captureConsole: parseBoolean(process.env.LOGGING_CAPTURE_CONSOLE) ?? true,
+      maxFiles: parsePort(process.env.LOGGING_MAX_FILES, 14),
+      debugEndpointEnabled: parseBoolean(process.env.LOGGING_DEBUG_ENDPOINT_ENABLED) ?? true,
     },
     n8n: {
       enabled: n8nEnabled,

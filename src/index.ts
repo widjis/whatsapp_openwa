@@ -10,7 +10,6 @@ import { OpenwaClient } from './features/channel/openwaClient.js'
 import { SessionService } from './features/channel/sessionService.js'
 import { MessagingService } from './features/channel/messagingService.js'
 import { DirectoryService } from './features/channel/directoryService.js'
-import { SessionConnectionNotifier } from './features/channel/sessionConnectionNotifier.js'
 import { WebhookCaptureStore, WebhookService } from './features/channel/webhookService.js'
 import { startHelpdeskDispatcher } from './features/dispatcher/helpdeskDispatcher.js'
 import { InboundCommandService } from './features/inbound/commandService.js'
@@ -20,7 +19,9 @@ import { N8nIntegrationService } from './features/integrations/n8n.js'
 import { createCheckIpMiddleware } from './features/http/middleware/checkIp.js'
 import { registerMessageRoutes } from './features/http/routes/messages.js'
 import { registerChannelRoutes } from './features/http/routes/channel.js'
+import { registerDebugRoutes } from './features/http/routes/debug.js'
 import { registerWebhookRoutes } from './features/http/routes/webhooks.js'
+import { initializeRuntimeLogger } from './features/observability/runtimeLogger.js'
 import { downloadSharepointFileToPath, resolveSharepointTokenCachePath } from './sharepointDownloadLeaveSchedule.js'
 
 dotenv.config()
@@ -30,6 +31,7 @@ const __dirname = path.dirname(__filename)
 const projectRoot = path.resolve(__dirname, '..')
 
 const config = loadConfig(projectRoot)
+const runtimeLogger = initializeRuntimeLogger(config.logging)
 const app = express()
 
 function parseBoolean(raw: string | undefined): boolean | null {
@@ -182,12 +184,6 @@ const openwaClient = new OpenwaClient(config.openwa)
 const sessionService = new SessionService(openwaClient)
 const messagingService = new MessagingService(openwaClient)
 const directoryService = new DirectoryService(openwaClient)
-const sessionConnectionNotifier = new SessionConnectionNotifier({
-  sessionService,
-  messagingService,
-  notifyChatId: config.notifications.openwaConnectedNumber,
-  intervalMs: config.notifications.sessionPollIntervalMs,
-})
 const webhookService = new WebhookService(openwaClient)
 const webhookCaptureStore = new WebhookCaptureStore(config.dataDir)
 const ldapService = new LdapService()
@@ -246,6 +242,13 @@ registerChannelRoutes({
   sessions: sessionService,
 })
 
+registerDebugRoutes({
+  app,
+  checkIp,
+  logger: runtimeLogger,
+  enabled: config.logging.debugEndpointEnabled,
+})
+
 registerWebhookRoutes({
   app,
   checkIp,
@@ -266,21 +269,20 @@ app.listen(config.port, () => {
       webhookUrlConfigured: Boolean(config.openwa.webhookUrl),
       pollingEnabled,
       n8nEnabled: n8nIntegration.isEnabled(),
-      connectedNotifierEnabled: Boolean(config.notifications.openwaConnectedNumber),
       allowedIpCount: config.allowedIps.length,
       allowedPhoneCount: config.allowedPhoneNumbers.length,
       dataDir: config.dataDir,
+      logDir: config.logging.directory,
       uploadsDir,
     })
   )
   startLeaveScheduleAutoDownloadScheduler()
-  sessionConnectionNotifier.start()
 })
 
 function shutdown(): void {
+  console.log('[shutdown] stopping services')
   dispatcher.stop()
   pollingHandle?.stop()
-  sessionConnectionNotifier.stop()
   process.exit(0)
 }
 
