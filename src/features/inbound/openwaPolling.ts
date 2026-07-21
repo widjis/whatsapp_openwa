@@ -91,9 +91,12 @@ function buildInboundEvent(args: {
     chatId,
     senderId,
     senderPhone: normalizePhoneDigits(senderId) || null,
+    pushName: null,
     isGroup: isGroupChat(chatId),
     messageId: args.message.waMessageId ?? args.message.id ?? null,
     text: body,
+    messageType: args.message.type ?? 'text',
+    mentionedJids: [],
     occurredAt,
     raw: args.message,
   }

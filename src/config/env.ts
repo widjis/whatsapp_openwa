@@ -5,6 +5,10 @@ export type AppConfig = {
   allowedIps: string[];
   allowedPhoneNumbers: string[];
   dataDir: string;
+  notifications: {
+    openwaConnectedNumber?: string;
+    sessionPollIntervalMs: number;
+  };
   n8n: {
     enabled: boolean;
     webhookUrl?: string;
@@ -64,6 +68,10 @@ export function loadConfig(projectRoot: string): AppConfig {
     allowedIps: parseAllowedIps(process.env.ALLOWED_IPS),
     allowedPhoneNumbers: parseCsv(process.env.ALLOWED_PHONE_NUMBERS),
     dataDir: path.isAbsolute(dataDirRaw) ? dataDirRaw : path.join(projectRoot, dataDirRaw),
+    notifications: {
+      openwaConnectedNumber: parseOptional(process.env.OPENWA_NUMBER_TEST),
+      sessionPollIntervalMs: parsePort(process.env.OPENWA_SESSION_POLL_INTERVAL_MS, 5_000),
+    },
     n8n: {
       enabled: n8nEnabled,
       webhookUrl: n8nWebhookUrl,

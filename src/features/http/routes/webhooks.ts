@@ -3,6 +3,7 @@ import { body, query, validationResult } from 'express-validator';
 import {
   normalizeOpenwaEvent,
   type InboundMessageEvent,
+  type PresenceUpdateEvent,
   type ReactionEvent,
 } from '../../channel/eventNormalizer.js';
 import { getDefaultWebhookEvents, type WebhookCaptureStore, type WebhookService } from '../../channel/webhookService.js';
@@ -20,6 +21,7 @@ type WebhookCommandService = {
 
 type WebhookN8nService = {
   processInboundMessage(event: InboundMessageEvent): Promise<{ handled: boolean; replyText?: string }>;
+  processPresenceUpdate(event: PresenceUpdateEvent): Promise<{ handled: boolean }>;
 };
 
 type RegisterWebhookRoutesDeps = {
@@ -247,6 +249,19 @@ async function processWebhookPayload(args: ProcessWebhookPayloadArgs): Promise<{
       },
       ['eventType', 'sessionId', 'chatId', 'senderId', 'senderPhone', 'messageId', 'emoji', 'removed']
     );
+  } else if (normalizedEvent?.eventType === 'presence.update') {
+    logWebhook(
+      '[webhook:normalized]',
+      {
+        eventType: normalizedEvent.eventType,
+        sessionId: normalizedEvent.sessionId,
+        chatId: normalizedEvent.chatId,
+        isGroup: normalizedEvent.isGroup,
+        updateCount: normalizedEvent.updates.length,
+        updates: normalizedEvent.updates.map((item) => `${item.participantId}:${item.presence}`),
+      },
+      ['eventType', 'sessionId', 'chatId', 'isGroup', 'updateCount', 'updates']
+    );
   } else {
     logWebhook(
       '[webhook:normalize_skipped]',
@@ -273,6 +288,13 @@ async function processWebhookPayload(args: ProcessWebhookPayloadArgs): Promise<{
     }
   } else if (normalizedEvent?.eventType === 'message.reaction') {
     processed = await args.commandService.processReactionEvent(normalizedEvent);
+  } else if (normalizedEvent?.eventType === 'presence.update') {
+    if (args.n8n) {
+      const result = await args.n8n.processPresenceUpdate(normalizedEvent);
+      if (result.handled) {
+        processed = { handled: true, commandName: 'presence.update' };
+      }
+    }
   }
   logWebhook(
     '[webhook:processed]',

@@ -26,6 +26,17 @@ export type FindUsersResult =
       error: string
     }
 
+export type N8nAdUserLookup = {
+  name: string
+  email: string | null
+  title: string | null
+  department: string | null
+  mobile: string | null
+  telephoneNumber: string | null
+  employeeId: string | null
+  source: 'ldap' | 'push_name' | 'unknown'
+}
+
 export type BitLockerRecoveryKey = {
   partitionId: string
   password: string
@@ -289,6 +300,44 @@ function pickFirstAttr(map: Map<string, string[]>, name: string): string | undef
   const values = map.get(name.toLowerCase())
   const first = values?.[0]
   return first ? String(first) : undefined
+}
+
+function normalizePhoneDigits(value: string | null | undefined): string {
+  return (value ?? '').replace(/[^\d]/g, '')
+}
+
+function scorePhoneCandidate(args: { lookupDigits: string; mobile?: string | null; telephoneNumber?: string | null }): number {
+  const lookup = args.lookupDigits
+  if (!lookup) return 0
+
+  const candidates = [normalizePhoneDigits(args.mobile), normalizePhoneDigits(args.telephoneNumber)].filter((value) => value.length > 0)
+  let score = 0
+  for (const candidate of candidates) {
+    if (candidate === lookup) score = Math.max(score, 100)
+    else if (candidate.endsWith(lookup) || lookup.endsWith(candidate)) score = Math.max(score, 80)
+    else if (candidate.includes(lookup) || lookup.includes(candidate)) score = Math.max(score, 60)
+  }
+  return score
+}
+
+function mapEntryToN8nAdUser(entry: ldap.SearchEntry, source: 'ldap' | 'push_name'): N8nAdUserLookup {
+  const map = buildAttributeMap(entry)
+  return {
+    name:
+      pickFirstAttr(map, 'displayName') ??
+      pickFirstAttr(map, 'cn') ??
+      pickFirstAttr(map, 'name') ??
+      pickFirstAttr(map, 'sAMAccountName') ??
+      pickFirstAttr(map, 'userPrincipalName') ??
+      'Unknown',
+    email: pickFirstAttr(map, 'mail') ?? null,
+    title: pickFirstAttr(map, 'title') ?? null,
+    department: pickFirstAttr(map, 'department') ?? null,
+    mobile: pickFirstAttr(map, 'mobile') ?? pickFirstAttr(map, 'mobileNumber') ?? null,
+    telephoneNumber: pickFirstAttr(map, 'telephoneNumber') ?? null,
+    employeeId: pickFirstAttr(map, 'employeeID') ?? null,
+    source,
+  }
 }
 
 async function initializeDbPool(): Promise<sql.ConnectionPool> {
@@ -873,6 +922,115 @@ export async function findUserMobileByEmail(args: { email: string }): Promise<st
 }
 
 export class LdapService {
+  async findAdUserByPhone(args: { phone: string; pushName?: string | null }): Promise<N8nAdUserLookup | null> {
+    const baseDn = readBaseDn()
+    if (!baseDn) return null
+
+    const lookupDigits = normalizePhoneDigits(args.phone)
+    const pushName = args.pushName?.trim() ?? ''
+
+    let client: ldap.Client | null = null
+    try {
+      client = await getLdapClient()
+
+      if (lookupDigits.length > 0) {
+        const phoneFragments = Array.from(
+          new Set([
+            lookupDigits,
+            lookupDigits.startsWith('62') ? `0${lookupDigits.slice(2)}` : '',
+            lookupDigits.startsWith('0') ? `62${lookupDigits.slice(1)}` : '',
+          ].filter((value) => value.length > 0))
+        )
+
+        const phoneFilter = phoneFragments
+          .map((value) => {
+            const escaped = escapeLdapFilterValue(value)
+            return `(|(mobile=*${escaped}*)(mobileNumber=*${escaped}*)(telephoneNumber=*${escaped}*))`
+          })
+          .join('')
+
+        const filter = `(&(|${phoneFilter})(objectCategory=person)(objectClass=user))`
+        const match = await new Promise<N8nAdUserLookup | null>((resolve, reject) => {
+          let best: { user: N8nAdUserLookup; score: number } | null = null
+          client!.search(
+            baseDn,
+            {
+              scope: 'sub',
+              filter,
+              attributes: ['displayName', 'cn', 'name', 'sAMAccountName', 'userPrincipalName', 'mail', 'title', 'department', 'mobile', 'mobileNumber', 'telephoneNumber', 'employeeID'],
+              sizeLimit: 10,
+              timeLimit: 10,
+            },
+            (error, result) => {
+              if (error) {
+                reject(error)
+                return
+              }
+
+              result.on('searchEntry', (entry) => {
+                const user = mapEntryToN8nAdUser(entry, 'ldap')
+                const score = scorePhoneCandidate({
+                  lookupDigits,
+                  mobile: user.mobile,
+                  telephoneNumber: user.telephoneNumber,
+                })
+                if (!best || score > best.score) best = { user, score }
+              })
+              result.on('error', reject)
+              result.on('end', () => resolve(best?.score ? best.user : null))
+            }
+          )
+        })
+
+        if (match) return match
+      }
+
+      if (pushName.length > 0) {
+        const escaped = escapeLdapFilterValue(pushName.toLowerCase())
+        const filter =
+          `(&` +
+          `(|(cn=*${escaped}*)(displayName=*${escaped}*)(sAMAccountName=*${escaped}*)(userPrincipalName=*${escaped}*))` +
+          `(objectCategory=person)(objectClass=user)` +
+          `)`
+
+        const fallback = await new Promise<N8nAdUserLookup | null>((resolve, reject) => {
+          let first: N8nAdUserLookup | null = null
+          client!.search(
+            baseDn,
+            {
+              scope: 'sub',
+              filter,
+              attributes: ['displayName', 'cn', 'name', 'sAMAccountName', 'userPrincipalName', 'mail', 'title', 'department', 'mobile', 'mobileNumber', 'telephoneNumber', 'employeeID'],
+              sizeLimit: 1,
+              timeLimit: 10,
+            },
+            (error, result) => {
+              if (error) {
+                reject(error)
+                return
+              }
+              result.on('searchEntry', (entry) => {
+                if (!first) first = mapEntryToN8nAdUser(entry, 'push_name')
+              })
+              result.on('error', reject)
+              result.on('end', () => resolve(first))
+            }
+          )
+        })
+
+        if (fallback) return fallback
+      }
+      return null
+    } catch {
+      return null
+    } finally {
+      try {
+        client?.unbind()
+      } catch {
+      }
+    }
+  }
+
   async findUsersByCommonName(args: { query: string; includePhoto: boolean }): Promise<FindUsersResult> {
     const baseDn = readBaseDn()
     if (!baseDn) {

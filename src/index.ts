@@ -10,6 +10,7 @@ import { OpenwaClient } from './features/channel/openwaClient.js'
 import { SessionService } from './features/channel/sessionService.js'
 import { MessagingService } from './features/channel/messagingService.js'
 import { DirectoryService } from './features/channel/directoryService.js'
+import { SessionConnectionNotifier } from './features/channel/sessionConnectionNotifier.js'
 import { WebhookCaptureStore, WebhookService } from './features/channel/webhookService.js'
 import { startHelpdeskDispatcher } from './features/dispatcher/helpdeskDispatcher.js'
 import { InboundCommandService } from './features/inbound/commandService.js'
@@ -181,6 +182,12 @@ const openwaClient = new OpenwaClient(config.openwa)
 const sessionService = new SessionService(openwaClient)
 const messagingService = new MessagingService(openwaClient)
 const directoryService = new DirectoryService(openwaClient)
+const sessionConnectionNotifier = new SessionConnectionNotifier({
+  sessionService,
+  messagingService,
+  notifyChatId: config.notifications.openwaConnectedNumber,
+  intervalMs: config.notifications.sessionPollIntervalMs,
+})
 const webhookService = new WebhookService(openwaClient)
 const webhookCaptureStore = new WebhookCaptureStore(config.dataDir)
 const ldapService = new LdapService()
@@ -190,7 +197,7 @@ const inboundCommandService = new InboundCommandService(
   ldapService,
   config.allowedPhoneNumbers
 )
-const n8nIntegration = new N8nIntegrationService(messagingService, config.n8n, sessionService)
+const n8nIntegration = new N8nIntegrationService(messagingService, config.n8n, sessionService, ldapService)
 const pollingEnabled = parseBoolean(process.env.OPENWA_POLLING_ENABLED) === true
 const pollingIntervalMs = parseIntEnv('OPENWA_POLLING_INTERVAL_MS', 1500)
 const pollingLimit = parseIntEnv('OPENWA_POLLING_LIMIT', 50)
@@ -259,6 +266,7 @@ app.listen(config.port, () => {
       webhookUrlConfigured: Boolean(config.openwa.webhookUrl),
       pollingEnabled,
       n8nEnabled: n8nIntegration.isEnabled(),
+      connectedNotifierEnabled: Boolean(config.notifications.openwaConnectedNumber),
       allowedIpCount: config.allowedIps.length,
       allowedPhoneCount: config.allowedPhoneNumbers.length,
       dataDir: config.dataDir,
@@ -266,11 +274,13 @@ app.listen(config.port, () => {
     })
   )
   startLeaveScheduleAutoDownloadScheduler()
+  sessionConnectionNotifier.start()
 })
 
 function shutdown(): void {
   dispatcher.stop()
   pollingHandle?.stop()
+  sessionConnectionNotifier.stop()
   process.exit(0)
 }
 
