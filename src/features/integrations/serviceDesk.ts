@@ -6,6 +6,13 @@ type ServiceDeskCategory = {
   name?: string
 }
 
+export type ServiceDeskAttachment = {
+  id?: string
+  name: string
+  content_url: string
+  content_type: string
+}
+
 type ServiceDeskDisplayTime = {
   display_value?: string
 }
@@ -47,6 +54,7 @@ export type ServiceDeskRequest = {
   udf_fields?: ServiceDeskUdfFields
   technician?: ServiceDeskTechnician
   created_time?: ServiceDeskDisplayTime
+  attachments?: ServiceDeskAttachment[]
 }
 
 type ServiceDeskListRequest = {
@@ -266,6 +274,21 @@ export async function viewRequest(requestId: string): Promise<ServiceDeskRequest
     console.error(`ServiceDesk viewRequest failed: ${error instanceof Error ? error.message : String(error)}`)
     return null
   }
+}
+
+export async function downloadServiceDeskAttachment(args: { contentUrl: string }): Promise<Buffer> {
+  const { hostBaseUrl } = getServiceDeskUrls()
+  const headers = getServiceDeskHeaders()
+  const raw = args.contentUrl.trim()
+  const downloadUrl = raw.startsWith('http://') || raw.startsWith('https://') ? raw : `${hostBaseUrl}${raw}`
+
+  const response = await axios.get<ArrayBuffer>(downloadUrl, {
+    headers,
+    httpsAgent,
+    responseType: 'arraybuffer',
+  })
+
+  return Buffer.from(response.data)
 }
 
 export async function updateRequest(requestId: string, args: UpdateRequestArgs): Promise<UpdateRequestResult> {

@@ -6,6 +6,7 @@
 
 ## Execution Notes
 - Phase 1 remains the active checklist driver until real OpenWA webhook evidence is captured and documented.
+- For helpdesk parity tracking against `reference/`, see `docs/helpdesk-parity-checklist.md`.
 - Some later-phase implementation scaffolding already exists in `src/`, but it must be treated as partial progress, not as phase completion.
 - Do not mark later-phase checklist items complete until their own challenge/verification evidence is recorded in this roadmap and synchronized docs.
 - Before implementing or updating status, review the relevant source-of-truth documents under `docs/` for the current phase.

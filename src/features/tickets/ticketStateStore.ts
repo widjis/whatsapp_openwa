@@ -10,6 +10,7 @@ export type TicketState = {
   lastNotifiedHash?: string | null
   lastReminderAtIso?: string | null
   lastReminderHash?: string | null
+  srfSentAttachmentUrls?: string[]
 }
 
 const inMemoryTicketState = new Map<string, TicketState>()
@@ -116,6 +117,9 @@ function safeParseTicketState(raw: string | null): TicketState | null {
           : record.lastReminderHash === null
             ? null
             : undefined,
+      srfSentAttachmentUrls: Array.isArray(record.srfSentAttachmentUrls)
+        ? (record.srfSentAttachmentUrls.filter((item) => typeof item === 'string') as string[])
+        : undefined,
     }
   } catch {
     return null

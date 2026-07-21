@@ -1,4 +1,4 @@
-import type { GroupMetadata, GroupSummary } from './types.js';
+import type { GroupMetadata, GroupSummary, SessionSummary } from './types.js';
 import { OpenwaClient } from './openwaClient.js';
 
 function readBooleanLike(value: unknown): boolean | null {
@@ -99,6 +99,7 @@ function readPositiveIntEnv(name: string, fallback: number): number {
 
 export class DirectoryService {
   private groupCache: GroupCacheSnapshot | null = null;
+  private selfJid: string | null = null;
 
   constructor(private readonly client: OpenwaClient) {}
 
@@ -135,6 +136,17 @@ export class DirectoryService {
       `/api/sessions/${encodeURIComponent(sessionId)}/groups/${encodeURIComponent(groupId)}`
     );
     return parseGroupMetadata(payload);
+  }
+
+  async getSelfJid(): Promise<string | null> {
+    if (this.selfJid) return this.selfJid;
+    const sessionId = await this.client.resolveSessionId();
+    const payload = await this.client.get<SessionSummary>(`/api/sessions/${encodeURIComponent(sessionId)}`);
+    const phoneRaw = typeof payload.phone === 'string' ? payload.phone : '';
+    const digits = phoneRaw.replace(/[^\d]/g, '');
+    if (!digits) return null;
+    this.selfJid = `${digits}@c.us`;
+    return this.selfJid;
   }
 
   invalidateGroupsCache(): void {

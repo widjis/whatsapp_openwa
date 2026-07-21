@@ -6,6 +6,7 @@ import {
   type ReactionEvent,
 } from '../../channel/eventNormalizer.js';
 import { getDefaultWebhookEvents, type WebhookCaptureStore, type WebhookService } from '../../channel/webhookService.js';
+import { loadTicketNotification } from '../../tickets/claimStore.js';
 
 type CommandProcessResult = {
   handled: boolean;
@@ -17,12 +18,17 @@ type WebhookCommandService = {
   processReactionEvent(event: ReactionEvent): Promise<CommandProcessResult>;
 };
 
+type WebhookN8nService = {
+  processInboundMessage(event: InboundMessageEvent): Promise<{ handled: boolean; replyText?: string }>;
+};
+
 type RegisterWebhookRoutesDeps = {
   app: Express;
   checkIp: (req: Request, res: Response, next: () => void) => void;
   captureStore: WebhookCaptureStore;
   webhookService: WebhookService;
   commandService: WebhookCommandService;
+  n8n?: WebhookN8nService;
   defaultWebhookUrl?: string;
   defaultWebhookSecret?: string;
 };
@@ -35,6 +41,7 @@ type ProcessWebhookPayloadArgs = {
   remoteAddress: string;
   captureStore: WebhookCaptureStore;
   commandService: WebhookCommandService;
+  n8n?: WebhookN8nService;
 };
 
 function toHeaderRecord(headers: Request['headers']): Record<string, string> {
@@ -258,6 +265,12 @@ async function processWebhookPayload(args: ProcessWebhookPayloadArgs): Promise<{
   let processed: CommandProcessResult = { handled: false };
   if (normalizedEvent?.eventType === 'message.received') {
     processed = await args.commandService.processInboundMessage(normalizedEvent);
+    if (!processed.handled && args.n8n) {
+      const n8nResult = await args.n8n.processInboundMessage(normalizedEvent);
+      if (n8nResult.handled) {
+        processed = { handled: true, commandName: 'n8n' };
+      }
+    }
   } else if (normalizedEvent?.eventType === 'message.reaction') {
     processed = await args.commandService.processReactionEvent(normalizedEvent);
   }
@@ -293,6 +306,7 @@ export function registerWebhookRoutes(deps: RegisterWebhookRoutesDeps) {
         remoteAddress: req.ip ?? '',
         captureStore: deps.captureStore,
         commandService: deps.commandService,
+        n8n: deps.n8n,
       });
       res.status(202).json({
         status: true,
@@ -347,6 +361,37 @@ export function registerWebhookRoutes(deps: RegisterWebhookRoutesDeps) {
     }
   );
 
+  deps.app.get('/channel/webhooks/validate/reaction-latest', deps.checkIp, async (_req: Request, res: Response) => {
+    try {
+      const capture = await deps.captureStore.getLatestByEventType('message.reaction');
+      if (!capture) {
+        res.status(404).json({ status: false, message: 'No capture found for eventType: message.reaction' });
+        return;
+      }
+
+      const normalized = normalizeOpenwaEvent(capture.payload);
+      if (!normalized || normalized.eventType !== 'message.reaction') {
+        res.status(422).json({ status: false, message: 'Latest message.reaction capture could not be normalized' });
+        return;
+      }
+
+      const stored = await loadTicketNotification({ remoteJid: normalized.chatId, messageId: normalized.messageId });
+      res.status(200).json({
+        status: true,
+        capture: { captureId: capture.captureId, capturedAt: capture.capturedAt, eventType: capture.eventType },
+        normalized,
+        correlation: {
+          lookupKey: { remoteJid: normalized.chatId, messageId: normalized.messageId },
+          found: Boolean(stored),
+          ticketId: stored?.ticketId ?? null,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ status: false, message });
+    }
+  });
+
   deps.app.post(
     '/channel/webhooks/test',
     deps.checkIp,
@@ -372,6 +417,7 @@ export function registerWebhookRoutes(deps: RegisterWebhookRoutesDeps) {
           remoteAddress: req.ip ?? '',
           captureStore: deps.captureStore,
           commandService: deps.commandService,
+          n8n: deps.n8n,
         });
 
         res.status(202).json({

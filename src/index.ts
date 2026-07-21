@@ -13,7 +13,9 @@ import { DirectoryService } from './features/channel/directoryService.js'
 import { WebhookCaptureStore, WebhookService } from './features/channel/webhookService.js'
 import { startHelpdeskDispatcher } from './features/dispatcher/helpdeskDispatcher.js'
 import { InboundCommandService } from './features/inbound/commandService.js'
+import { startOpenwaInboundPolling } from './features/inbound/openwaPolling.js'
 import { LdapService } from './features/integrations/ldap.js'
+import { N8nIntegrationService } from './features/integrations/n8n.js'
 import { createCheckIpMiddleware } from './features/http/middleware/checkIp.js'
 import { registerMessageRoutes } from './features/http/routes/messages.js'
 import { registerChannelRoutes } from './features/http/routes/channel.js'
@@ -188,6 +190,21 @@ const inboundCommandService = new InboundCommandService(
   ldapService,
   config.allowedPhoneNumbers
 )
+const n8nIntegration = new N8nIntegrationService(messagingService, config.n8n)
+const pollingEnabled = parseBoolean(process.env.OPENWA_POLLING_ENABLED) === true
+const pollingIntervalMs = parseIntEnv('OPENWA_POLLING_INTERVAL_MS', 1500)
+const pollingLimit = parseIntEnv('OPENWA_POLLING_LIMIT', 50)
+const pollingChatId = process.env.OPENWA_POLLING_CHAT_ID?.trim() ?? ''
+const pollingHandle = pollingEnabled
+  ? startOpenwaInboundPolling({
+      client: openwaClient,
+      commandService: inboundCommandService,
+      n8n: n8nIntegration,
+      intervalMs: pollingIntervalMs,
+      limit: pollingLimit,
+      chatId: pollingChatId.length > 0 ? pollingChatId : undefined,
+    })
+  : null
 const dispatcher = startHelpdeskDispatcher({ messaging: messagingService })
 const checkIp = createCheckIpMiddleware(config.allowedIps)
 
@@ -228,6 +245,7 @@ registerWebhookRoutes({
   captureStore: webhookCaptureStore,
   webhookService,
   commandService: inboundCommandService,
+  n8n: n8nIntegration,
   defaultWebhookUrl: config.openwa.webhookUrl,
   defaultWebhookSecret: config.openwa.webhookSecret,
 })
@@ -239,6 +257,8 @@ app.listen(config.port, () => {
     JSON.stringify({
       openwaConfigured: openwaClient.isConfigured(),
       webhookUrlConfigured: Boolean(config.openwa.webhookUrl),
+      pollingEnabled,
+      n8nEnabled: n8nIntegration.isEnabled(),
       allowedIpCount: config.allowedIps.length,
       allowedPhoneCount: config.allowedPhoneNumbers.length,
       dataDir: config.dataDir,
@@ -250,6 +270,7 @@ app.listen(config.port, () => {
 
 function shutdown(): void {
   dispatcher.stop()
+  pollingHandle?.stop()
   process.exit(0)
 }
 

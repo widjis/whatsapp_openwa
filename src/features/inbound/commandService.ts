@@ -70,36 +70,157 @@ type LeaveMappingItem = {
 const DEBUG_LAPS_AUTH = process.env.DEBUG_LAPS_AUTH === 'true'
 const recentReactionEvents = new Map<string, number>()
 
-const HELP_TEXT = [
-  '*OpenWA Rebuild Commands*',
-  '- /hi',
-  '- /help',
-  '- /ping',
-  '- /finduser <name> [/photo]',
-  '- /resetpassword <username> <newPassword> [/change]',
-  '- /unlock <username>',
-  '- /getbitlocker <hostname>',
-  '- /getasset [type]',
-  '- /licenses [limit] [offset]',
-  '- /getlicense <license_name_or_id>',
-  '- /expiring [days]',
-  '- /licensereport',
-  '- /getlaps <hostname>',
-  '- /getlapsdiag <hostname>',
-  '- /setlaps technician <id> /a|/d',
-  '- /technician list',
-  '- /technician search <query>',
-  '- /technician view <id>',
-  '- /technician add "Name" "ICT Name" "Phone" "Email" "Role" "Gender"',
-  '- /technician update <id> "field" "value"',
-  '- /technician delete <id>',
-  '- /technician mapleave',
-  '',
-  'Notes:',
-  '- inbound OpenWA root app is active',
-  '- /finduser, /resetpassword, /unlock, /getbitlocker, /getasset, /licenses, /getlicense, /expiring, /licensereport, /getlaps, /getlapsdiag, /setlaps, and /technician run on the root app',
-  '- LAPS access supports LAPS_ADMIN_PHONE_NUMBERS and delegated technicians with laps_access=true',
-].join('\n')
+type CommandHelpEntry = {
+  usage: string
+  description: string
+  details?: string
+  available?: string
+  examples?: string[]
+}
+
+const HELP_TEXT =
+  `*Available Commands:*\n`
+  + `\n*General:*\n`
+  + `- /hi\n`
+  + `- /ping\n`
+  + `- /help\n`
+  + `- /help <command>\n`
+  + `\n*User (Active Directory):*\n`
+  + `- /finduser\n`
+  + `- /resetpassword\n`
+  + `- /unlock\n`
+  + `\n*System:*\n`
+  + `- /getasset\n`
+  + `- /getbitlocker\n`
+  + `- /getlaps\n`
+  + `- /getlapsdiag\n`
+  + `- /setlaps\n`
+  + `\n*Licenses:*\n`
+  + `- /licenses\n`
+  + `- /getlicense\n`
+  + `- /expiring\n`
+  + `- /licensereport\n`
+  + `\n*Operations:*\n`
+  + `- /technician\n`
+  + `\n*Example:*\n`
+  + `- /help finduser`
+
+const COMMAND_HELP: Record<string, CommandHelpEntry> = {
+  hi: {
+    usage: '/hi',
+    description: 'Simple connectivity check.',
+  },
+  ping: {
+    usage: '/ping',
+    description: 'Simple connectivity check (returns pong).',
+  },
+  help: {
+    usage: '/help [command]',
+    description: 'Shows available commands or detailed help for one command.',
+    examples: ['/help', '/help finduser', '/help /resetpassword'],
+  },
+  finduser: {
+    usage: '/finduser <name> [/photo]',
+    description: 'Finds users in Active Directory by display name (CN).',
+    details:
+      'Searches by partial match on common name (CN). Returns display name, email, title, department, phone, and password info. Add `/photo` to include the user photo if available in AD.',
+    examples: ['/finduser peggy', '/finduser "john doe"', '/finduser peggy /photo'],
+  },
+  resetpassword: {
+    usage: '/resetpassword <username> <new_password> [/change]',
+    description:
+      'Resets the password for the given username. Optionally, use the `/change` flag to require the user to change their password at the next logon.',
+    examples: ['/resetpassword johndoe newpassword123', '/resetpassword johndoe newpassword123 /change'],
+  },
+  unlock: {
+    usage: '/unlock <username>',
+    description: 'Unlocks an Active Directory user account (clears lockout).',
+    examples: ['/unlock johndoe', '/unlock john.doe'],
+  },
+  getbitlocker: {
+    usage: '/getbitlocker <hostname>',
+    description: 'Retrieves BitLocker recovery keys for the specified hostname from Active Directory.',
+    examples: ['/getbitlocker mti-nb-123'],
+  },
+  getasset: {
+    usage: '/getasset [type]',
+    description: 'Summarizes assets from Snipe-IT by category.',
+    examples: ['/getasset', '/getasset pc', '/getasset notebook', '/getasset monitor'],
+  },
+  getlaps: {
+    usage: '/getlaps <hostname>',
+    description: 'Retrieves LAPS local admin account and current password for the specified hostname.',
+    details:
+      'For security, use this in private chat. Access is granted to LAPS admins (LAPS_ADMIN_PHONE_NUMBERS) and technicians with laps_access=true in technician contacts.',
+    examples: ['/getlaps mti-nb-123'],
+  },
+  getlapsdiag: {
+    usage: '/getlapsdiag <hostname>',
+    description: 'Shows which LAPS LDAP attributes are visible to the bot account for a hostname.',
+    details:
+      'Diagnostic command only. Does not return passwords. Access is granted to LAPS admins (LAPS_ADMIN_PHONE_NUMBERS) and technicians with laps_access=true in technician contacts.',
+    examples: ['/getlapsdiag mti-nb-123'],
+  },
+  setlaps: {
+    usage: '/setlaps technician <id> /a|/d',
+    description: 'Grants or revokes LAPS access for a technician.',
+    details: 'Admin-only. Updates technician contacts laps_access flag. Use /a to allow and /d to deny.',
+    examples: ['/setlaps technician 7 /a', '/setlaps technician 7 /d'],
+  },
+  licenses: {
+    usage: '/licenses [limit] [offset]',
+    description: 'Lists all software licenses with pagination support.',
+    details:
+      'Retrieves licenses from Snipe-IT asset management system. Default limit is 50 licenses per page. Use offset for pagination.',
+    examples: ['/licenses', '/licenses 10', '/licenses 10 0'],
+  },
+  getlicense: {
+    usage: '/getlicense <name_or_id>',
+    description: 'Gets detailed information about a specific license by name or ID.',
+    details:
+      'Searches for licenses by exact name match or ID. Returns details including manufacturer, purchase information, seat allocation, and expiration dates.',
+    examples: ['/getlicense Microsoft Office', '/getlicense 123', '/getlicense "Adobe Creative Suite"'],
+  },
+  expiring: {
+    usage: '/expiring [days]',
+    description: 'Lists licenses expiring within specified number of days (default: 30).',
+    details: 'Shows license name, usage, total seats, and days until expiration.',
+    examples: ['/expiring', '/expiring 30', '/expiring 90'],
+  },
+  licensereport: {
+    usage: '/licensereport',
+    description: 'Generates a comprehensive license utilization report with statistics.',
+    examples: ['/licensereport'],
+  },
+  technician: {
+    usage: '/technician <command> [parameters]',
+    description: 'Technician contact management (CRUD + leave mapping).',
+    available:
+      'Commands:\n- list\n- search <query>\n- view <id>\n- add "Name" "ICT Name" "Phone" "Email" "Role" "Gender"\n- update <id> "field" "value"\n- delete <id>\n- mapleave',
+    examples: [
+      '/technician list',
+      '/technician search Peggy',
+      '/technician view 5',
+      '/technician add "Ahmad Rizki" "Ahmad Rizki (Network Admin)" "08123456789" "ahmad.rizki@company.com" "Network Administrator" "Male"',
+      '/technician update 3 "phone" "08987654321"',
+      '/technician delete 8',
+      '/technician mapleave',
+    ],
+  },
+}
+
+function renderCommandHelp(commandKey: string): string | undefined {
+  const details = COMMAND_HELP[commandKey]
+  if (!details) return undefined
+
+  let helpText = `*Usage:* ${details.usage}\n*Description:* ${details.description}`
+  if (details.details) helpText += `\n*Details:* ${details.details}`
+  if (details.available) helpText += `\n*Available:* ${details.available}`
+  if (details.examples && details.examples.length > 0) {
+    helpText += `\n*Example(s):*\n${details.examples.join('\n')}`
+  }
+  return helpText
+}
 
 function truncate(value: string, maxLength = 120): string {
   return value.length <= maxLength ? value : `${value.slice(0, maxLength - 3)}...`
@@ -1322,7 +1443,31 @@ export class InboundCommandService {
         }
 
       case '/help':
-        return { handled: true, commandName: 'help', replies: [textReply(HELP_TEXT)] }
+        {
+          const targetRaw = tokens[1]?.replace(/^\/+/, '').toLowerCase()
+          if (!targetRaw) {
+            return { handled: true, commandName: 'help', replies: [textReply(HELP_TEXT)] }
+          }
+
+          const help = renderCommandHelp(targetRaw)
+          if (!help) {
+            const supported = Object.keys(COMMAND_HELP)
+              .sort()
+              .map((key) => `- ${key}`)
+              .join('\n')
+            return {
+              handled: true,
+              commandName: 'help',
+              replies: [
+                textReply(
+                  `Unknown command "${targetRaw}".\n\nUse /help to see the command list.\n\n*Supported /help keys:*\n${supported}`
+                ),
+              ],
+            }
+          }
+
+          return { handled: true, commandName: 'help', replies: [textReply(help)] }
+        }
 
       case '/finduser': {
         const args = tokens.slice(1)
@@ -1413,7 +1558,7 @@ export class InboundCommandService {
       }
 
       case '/unlock': {
-        if (!(await this.isAllowed(senderId))) {
+        if (!(await this.canUseLaps(senderId))) {
           return { handled: true, commandName: 'unlock', replies: [textReply('Access denied.')] }
         }
 

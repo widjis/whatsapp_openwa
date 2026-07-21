@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import OpenAI from 'openai'
 import type { Express, Request, Response } from 'express'
 import { body, validationResult } from 'express-validator'
 import type { Multer } from 'multer'
@@ -8,8 +9,10 @@ import {
   assignTechnicianToRequest,
   buildTicketLink,
   defineServiceCategory,
+  downloadServiceDeskAttachment,
   updateRequest,
   viewRequest,
+  type ServiceDeskAttachment,
   type ServiceDeskRequest,
 } from '../../integrations/serviceDesk.js'
 import { getContactByIctTechnicianName } from '../../integrations/technicianContacts.js'
@@ -17,6 +20,7 @@ import { findUserMobileByEmail } from '../../integrations/ldap.js'
 import { storeTicketNotification } from '../../tickets/claimStore.js'
 import { loadPreviousTicketState, saveTicketState } from '../../tickets/ticketStateStore.js'
 import { ensureMentionJid, phoneNumberFormatter } from '../../../utils/phone.js'
+import { extractPdfFirstPageText } from '../../../utils/pdf.js'
 
 type RegisterMessageRoutesDeps = {
   app: Express
@@ -156,9 +160,39 @@ function stripHtmlToText(value: string): string {
   return value.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
 }
 
-function truncateDescription(text: string, maxChars: number): string {
+function truncateDescriptionFallback(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text
   return `${text.slice(0, Math.max(0, maxChars - 3))}...`
+}
+
+async function truncateDescription(args: { text: string; maxChars: number }): Promise<string> {
+  const { text, maxChars } = args
+  if (text.length <= maxChars) return text
+
+  const apiKey = process.env.OPENAI_API_KEY?.trim()
+  if (!apiKey) return truncateDescriptionFallback(text, maxChars)
+
+  const client = new OpenAI({ apiKey })
+  const prompt =
+    `Truncate the following ticket description to ${maxChars} characters or fewer. ` +
+    `Preserve the key meaning. Do not add extra info. Output only the truncated text.\n\n` +
+    text
+
+  try {
+    const response = await client.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 200,
+      temperature: 0.2,
+    })
+
+    const content = response.choices[0]?.message?.content ?? ''
+    const trimmed = content.trim()
+    if (!trimmed) return truncateDescriptionFallback(text, maxChars)
+    return trimmed.length <= maxChars ? trimmed : truncateDescriptionFallback(trimmed, maxChars)
+  } catch {
+    return truncateDescriptionFallback(text, maxChars)
+  }
 }
 
 function renderKeyValueLines(rows: Array<{ label: string; value: string }>): string {
@@ -328,6 +362,375 @@ async function resolveGroupChatId(args: {
   }
 }
 
+type GroupSendPrecheckResult = {
+  receiverMeta: {
+    isGroup: boolean
+    groupAnnounce: boolean | null
+    botInGroup: boolean | null
+    botIsAdmin: boolean | null
+    botUserId: string | null
+  }
+  blockError: string | null
+}
+
+function isGroupChatId(chatId: string): boolean {
+  return chatId.endsWith('@g.us')
+}
+
+function normalizeKeywordText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function parsePhonesEnv(name: string): string[] {
+  const raw = process.env[name]
+  if (!raw) return []
+  return raw
+    .split(',')
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+}
+
+async function precheckGroupSend(args: { directory: DirectoryService; receiverJid: string }): Promise<GroupSendPrecheckResult> {
+  if (!isGroupChatId(args.receiverJid)) {
+    return {
+      receiverMeta: { isGroup: false, groupAnnounce: null, botInGroup: null, botIsAdmin: null, botUserId: null },
+      blockError: null,
+    }
+  }
+
+  try {
+    const meta = await args.directory.getGroupMetadata(args.receiverJid)
+    const selfJid = await args.directory.getSelfJid()
+    const participants = meta?.participants ?? null
+    const groupAnnounce = meta?.announce ?? null
+    const botUserId = selfJid
+    const botParticipant = botUserId && participants ? participants.find((p) => p.id === botUserId) : undefined
+    const botInGroup = botUserId && participants ? Boolean(botParticipant) : null
+    const botIsAdmin = botParticipant ? botParticipant.isAdmin : botInGroup === false ? false : null
+
+    const blockError =
+      botInGroup === false
+        ? 'Bot is not a member of the target group.'
+        : groupAnnounce === true && botIsAdmin === false
+          ? 'Target group is announce-only and bot is not admin.'
+          : null
+
+    return {
+      receiverMeta: {
+        isGroup: true,
+        groupAnnounce,
+        botInGroup,
+        botIsAdmin,
+        botUserId,
+      },
+      blockError,
+    }
+  } catch {
+    return {
+      receiverMeta: { isGroup: true, groupAnnounce: null, botInGroup: null, botIsAdmin: null, botUserId: null },
+      blockError: null,
+    }
+  }
+}
+
+function isAttachment(value: unknown): value is ServiceDeskAttachment {
+  if (!value || typeof value !== 'object') return false
+  const record = value as Record<string, unknown>
+  return typeof record.name === 'string' && typeof record.content_url === 'string' && typeof record.content_type === 'string'
+}
+
+function isSrfPdfAttachmentHeuristic(args: {
+  request: ServiceDeskRequest
+  attachment: ServiceDeskAttachment
+  pdfFirstPageText?: string
+}): boolean {
+  const contentType = args.attachment.content_type.toLowerCase()
+  if (!contentType.startsWith('application/pdf')) return false
+
+  const category = args.request.service_category?.name?.trim() ?? ''
+  if (category.startsWith('14.')) return true
+
+  const combined = normalizeKeywordText(
+    `${args.request.subject ?? ''}\n${args.request.description ?? ''}\n${args.attachment.name ?? ''}\n${category}\n${args.pdfFirstPageText ?? ''}`
+  )
+  const needles = ['srf', 'service request form', 'approval', 'it service request form', 'form']
+  return needles.some((needle) => combined.includes(normalizeKeywordText(needle)))
+}
+
+function parseBooleanEnv(name: string, fallback: boolean): boolean {
+  const raw = process.env[name]
+  if (!raw) return fallback
+  const normalized = raw.trim().toLowerCase()
+  if (['true', '1', 'yes', 'y'].includes(normalized)) return true
+  if (['false', '0', 'no', 'n'].includes(normalized)) return false
+  return fallback
+}
+
+async function isSrfPdfAttachment(args: {
+  request: ServiceDeskRequest
+  attachment: ServiceDeskAttachment
+  pdfFirstPageText?: string
+}): Promise<boolean> {
+  if (!args.attachment.content_type.toLowerCase().startsWith('application/pdf')) return false
+
+  const apiKey = process.env.OPENAI_API_KEY?.trim()
+  const aiEnabled = parseBooleanEnv('SRF_DETECTION_AI_ENABLED', true)
+  const model = process.env.SRF_DETECTION_AI_MODEL?.trim() || 'gpt-4o-mini'
+  if (!apiKey || !aiEnabled) return isSrfPdfAttachmentHeuristic(args)
+
+  const subject = (args.request.subject ?? '').trim()
+  const description = stripHtmlToText(args.request.description ?? '')
+  const category = (args.request.service_category?.name ?? '').trim()
+  const attachmentName = (args.attachment.name ?? '').trim()
+
+  const prompt =
+    `Decide if this ticket attachment is an SRF (Service Request Form) that needs approval. ` +
+    `Answer with ONLY "SRF" or "NOT_SRF".\n\n` +
+    `Ticket subject: ${subject}\n` +
+    `Ticket description: ${truncateDescriptionFallback(description, 800)}\n` +
+    `Ticket category: ${category}\n` +
+    `Attachment filename: ${attachmentName}\n` +
+    `Attachment content-type: ${args.attachment.content_type}\n` +
+    `PDF first page text (if available): ${truncateDescriptionFallback(args.pdfFirstPageText ?? '', 1200)}\n`
+
+  try {
+    const client = new OpenAI({ apiKey })
+    const response = await client.chat.completions.create({
+      model,
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 5,
+      temperature: 0,
+    })
+    const content = (response.choices[0]?.message?.content ?? '').trim().toUpperCase()
+    if (content === 'SRF') return true
+    if (content === 'NOT_SRF') return false
+    return isSrfPdfAttachmentHeuristic(args)
+  } catch {
+    return isSrfPdfAttachmentHeuristic(args)
+  }
+}
+
+async function buildSrfApprovalMessage(args: {
+  ticketId: string
+  requesterLabel: string
+  subject: string
+  description: string
+  attachmentName: string
+  mentions: string[]
+  pdfFirstPageText?: string
+}): Promise<string> {
+  const mentionTokens = args.mentions.map((jid) => `@${jid.split('@')[0] ?? jid}`)
+  const mentionPrefix = mentionTokens.length > 0 ? `Pak ${mentionTokens.join(', ')}, ` : ''
+  const fallback =
+    `${mentionPrefix}terlampir SRF ${args.attachmentName}, dengan ticket ID ${args.ticketId} dari ${args.requesterLabel}, ` +
+    `terkait "${args.subject}". Silahkan direview untuk approvalnya.`
+
+  const apiKey = process.env.OPENAI_API_KEY?.trim()
+  if (!apiKey) return fallback
+
+  const client = new OpenAI({ apiKey })
+  const prompt =
+    `Kamu adalah MTI ICT Helpdesk. Buat pesan singkat untuk approval SRF, tanpa menambah info di luar data. ` +
+    `Sertakan ticket ID, requester, subject, ringkasan 1 kalimat isi SRF (kalau data cukup), dan instruksi minta review approval. Output hanya pesan final.\n\n` +
+    `Ticket ID: ${args.ticketId}\nRequester: ${args.requesterLabel}\nSubject: ${args.subject}\nDescription: ${args.description}\nAttachment: ${args.attachmentName}\nPDF first page text: ${truncateDescriptionFallback(args.pdfFirstPageText ?? '', 1200)}\n` +
+    `Mentions: ${mentionTokens.join(', ') || '-'}`
+
+  try {
+    const response = await client.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 200,
+      temperature: 0.2,
+    })
+    const content = response.choices[0]?.message?.content ?? ''
+    const trimmed = content.trim()
+    if (!trimmed) return fallback
+    return trimmed
+  } catch {
+    return fallback
+  }
+}
+
+async function analyzeImageAttachment(args: {
+  ticketId: string
+  subject: string
+  description: string
+  attachmentName: string
+  base64Image: string
+}): Promise<string | null> {
+  const apiKey = process.env.OPENAI_API_KEY?.trim()
+  if (!apiKey) return null
+
+  const client = new OpenAI({ apiKey })
+  const prompt =
+    `Analyze the following ticket attachment in context.\n\n` +
+    `Ticket ID: ${args.ticketId}\n` +
+    `Subject: ${args.subject}\n` +
+    `Description: ${args.description}\n` +
+    `Attachment: ${args.attachmentName}\n\n` +
+    `Output a concise summary of what the attachment shows and any key details relevant to troubleshooting.`
+
+  try {
+    const response = await client.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${args.base64Image}` } },
+          ],
+        },
+      ],
+      max_tokens: 300,
+      temperature: 0.4,
+    })
+
+    const content = response.choices[0]?.message?.content ?? ''
+    const trimmed = content.trim()
+    return trimmed.length > 0 ? trimmed : null
+  } catch {
+    return null
+  }
+}
+
+async function handleAndSendAttachments(args: {
+  request: ServiceDeskRequest
+  receiverJid: string
+  messaging: MessagingService
+  allowSrfApproval: boolean
+  requesterLabel: string
+}): Promise<void> {
+  const attachmentsRaw = Array.isArray(args.request.attachments) ? args.request.attachments : []
+  const attachments = attachmentsRaw.filter(isAttachment)
+  if (attachments.length < 1) return
+
+  const subject = args.request.subject?.trim() ?? ''
+  const description = stripHtmlToText(args.request.description ?? '')
+  const descriptionTruncated = truncateDescriptionFallback(description, 500)
+  const analysisLines: string[] = []
+  const approverMentions = parsePhonesEnv('SRF_APPROVER_PHONES').map(ensureMentionJid)
+
+  for (const attachment of attachments) {
+    try {
+      const buffer = await downloadServiceDeskAttachment({ contentUrl: attachment.content_url })
+      const contentType = attachment.content_type
+      const name = attachment.name
+
+      if (contentType.startsWith('image/')) {
+        const base64Image = buffer.toString('base64')
+        const analysis = await analyzeImageAttachment({
+          ticketId: args.request.id,
+          subject,
+          description: descriptionTruncated,
+          attachmentName: name,
+          base64Image,
+        })
+
+        if (analysis) {
+          analysisLines.push(`- ${name}: ${analysis.replace(/\s+/g, ' ').trim()}`)
+        }
+
+        await args.messaging.sendImage({
+          chatId: args.receiverJid,
+          source: { kind: 'buffer', buffer, mimetype: contentType, filename: name },
+          caption: analysis ? analysis : `Attachment: ${name}`,
+        })
+
+        continue
+      }
+
+      if (args.allowSrfApproval && contentType.toLowerCase().startsWith('application/pdf')) {
+        const ticketId = args.request.id
+        const previousState = await loadPreviousTicketState(ticketId)
+        const alreadySent = new Set(previousState?.srfSentAttachmentUrls ?? [])
+        const attachmentUrlKey = attachment.content_url.trim()
+        if (attachmentUrlKey.length > 0 && alreadySent.has(attachmentUrlKey)) {
+          analysisLines.push(`- ${name}: Skipped duplicate SRF send`)
+          continue
+        }
+
+        let pdfFirstPageText: string | undefined
+        try {
+          const extracted = await extractPdfFirstPageText(buffer)
+          pdfFirstPageText = extracted.trim().length > 0 ? extracted.trim() : undefined
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          analysisLines.push(`- ${name}: PDF text extraction failed (${message})`)
+        }
+
+        const isSrf = await isSrfPdfAttachment({ request: args.request, attachment, pdfFirstPageText })
+        if (!isSrf) {
+          await args.messaging.sendDocument({
+            chatId: args.receiverJid,
+            document: buffer,
+            mimetype: contentType || 'application/pdf',
+            fileName: name,
+            caption: `Attachment: ${name}`,
+          })
+          continue
+        }
+
+        const approvalText = await buildSrfApprovalMessage({
+          ticketId: args.request.id,
+          requesterLabel: args.requesterLabel,
+          subject,
+          description: descriptionTruncated,
+          attachmentName: name,
+          mentions: approverMentions,
+          pdfFirstPageText,
+        })
+        await args.messaging.sendText({
+          chatId: args.receiverJid,
+          text: approvalText,
+          mentions: approverMentions,
+        })
+        await args.messaging.sendDocument({
+          chatId: args.receiverJid,
+          document: buffer,
+          mimetype: contentType || 'application/pdf',
+          fileName: name,
+          caption: `SRF: ${name}`,
+          mentions: approverMentions,
+        })
+
+        if (attachmentUrlKey.length > 0) {
+          const merged = [...alreadySent, attachmentUrlKey].slice(-40)
+          await saveTicketState(ticketId, {
+            ...(previousState ?? {}),
+            srfSentAttachmentUrls: merged,
+          })
+        }
+        continue
+      }
+
+      await args.messaging.sendDocument({
+        chatId: args.receiverJid,
+        document: buffer,
+        mimetype: contentType || 'application/octet-stream',
+        fileName: name,
+        caption: `Attachment: ${name}`,
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      analysisLines.push(`- ${attachment.name}: Error handling attachment (${message})`)
+    }
+  }
+
+  const filtered = analysisLines.map((line) => line.trim()).filter((line) => line.length > 0)
+  if (filtered.length > 0) {
+    await args.messaging.sendText({
+      chatId: args.receiverJid,
+      text: `*Attachment Analysis*\n${filtered.join('\n')}`,
+    })
+  }
+}
+
 export function registerMessageRoutes(deps: RegisterMessageRoutesDeps) {
   deps.app.post(
     '/send-message',
@@ -458,6 +861,12 @@ export function registerMessageRoutes(deps: RegisterMessageRoutesDeps) {
           return
         }
 
+        const precheck = await precheckGroupSend({ directory: deps.directory, receiverJid: resolved.chatId })
+        if (precheck.blockError) {
+          res.status(409).json({ status: false, message: precheck.blockError, receiverMeta: precheck.receiverMeta })
+          return
+        }
+
         const files = (req as Request & { files?: unknown }).files
         const document = pickUploadedFile(files, 'document')
         const image = pickUploadedFile(files, 'image')
@@ -529,9 +938,10 @@ export function registerMessageRoutes(deps: RegisterMessageRoutesDeps) {
       const subject = request.subject?.trim() || 'No subject'
       const createdDate = request.created_time?.display_value?.trim() || 'N/A'
       const descriptionPlain = stripHtmlToText(request.description ?? '')
-      const truncatedDescription = truncateDescription(descriptionPlain, 200)
+      const truncatedDescription = await truncateDescription({ text: descriptionPlain, maxChars: 200 })
       const ticketLink = buildTicketLink(request.id)
       const requesterJid = await resolveRequesterJid(request)
+      const receiverPrecheck = await precheckGroupSend({ directory: deps.directory, receiverJid })
 
       if (payload.status === 'new') {
         let categoryForMessage = request.service_category?.name?.trim() || 'N/A'
@@ -584,19 +994,33 @@ export function registerMessageRoutes(deps: RegisterMessageRoutesDeps) {
 
         let receiverSent = false
         let receiverError: string | null = null
-        try {
-          const sent = await deps.messaging.sendText({ chatId: receiverJid, text: messageText })
-          receiverSent = true
-          if (sent.messageId) {
-            await storeTicketNotification({
-              ticketId: request.id,
-              remoteJid: sent.remoteJid ?? receiverJid,
-              messageId: sent.messageId,
-            })
+        if (receiverPrecheck.blockError) {
+          receiverError = receiverPrecheck.blockError
+        } else {
+          try {
+            const sent = await deps.messaging.sendText({ chatId: receiverJid, text: messageText })
+            receiverSent = true
+            if (sent.messageId) {
+              await storeTicketNotification({
+                ticketId: request.id,
+                remoteJid: sent.remoteJid ?? receiverJid,
+                messageId: sent.messageId,
+              })
+            }
+          } catch (error) {
+            receiverError = error instanceof Error ? error.message : String(error)
+            console.error(`Receiver notify (new) failed for ${request.id}: ${receiverError}`)
           }
-        } catch (error) {
-          receiverError = error instanceof Error ? error.message : String(error)
-          console.error(`Receiver notify (new) failed for ${request.id}: ${receiverError}`)
+        }
+
+        if (receiverSent) {
+          await handleAndSendAttachments({
+            request,
+            receiverJid,
+            messaging: deps.messaging,
+            allowSrfApproval: true,
+            requesterLabel,
+          })
         }
 
         if (shouldNotify(payload.notify_requester_new, true) && requesterJid) {
@@ -620,13 +1044,17 @@ export function registerMessageRoutes(deps: RegisterMessageRoutesDeps) {
           }
         }
 
+        const stateSnapshot = await loadPreviousTicketState(request.id)
         await saveTicketState(request.id, {
+          ...(stateSnapshot ?? {}),
           technician: request.udf_fields?.udf_pick_601 ?? undefined,
           ticketStatus,
           priority: priorityForMessage,
         })
 
-        res.status(200).json({ status: true, message: 'Webhook processed', receiverSent, receiverError })
+        res
+          .status(200)
+          .json({ status: true, message: 'Webhook processed', receiverSent, receiverError, receiverMeta: receiverPrecheck.receiverMeta })
         return
       }
 
@@ -695,24 +1123,38 @@ export function registerMessageRoutes(deps: RegisterMessageRoutesDeps) {
 
       let receiverSent = false
       let receiverError: string | null = null
-      try {
-        await deps.messaging.sendText({
-          chatId: receiverJid,
-          text: renderTicketUpdateMessage({
-            ticketId: request.id,
-            requesterLabel,
-            category: categoryForMessage,
-            priority: priorityForMessage,
-            status: ticketStatusForMessage,
-            subject,
-            link: ticketLink,
-            changes,
-          }),
+      if (receiverPrecheck.blockError) {
+        receiverError = receiverPrecheck.blockError
+      } else {
+        try {
+          await deps.messaging.sendText({
+            chatId: receiverJid,
+            text: renderTicketUpdateMessage({
+              ticketId: request.id,
+              requesterLabel,
+              category: categoryForMessage,
+              priority: priorityForMessage,
+              status: ticketStatusForMessage,
+              subject,
+              link: ticketLink,
+              changes,
+            }),
+          })
+          receiverSent = true
+        } catch (error) {
+          receiverError = error instanceof Error ? error.message : String(error)
+          console.error(`Receiver notify (updated) failed for ${request.id}: ${receiverError}`)
+        }
+      }
+
+      if (receiverSent) {
+        await handleAndSendAttachments({
+          request,
+          receiverJid,
+          messaging: deps.messaging,
+          allowSrfApproval: false,
+          requesterLabel,
         })
-        receiverSent = true
-      } catch (error) {
-        receiverError = error instanceof Error ? error.message : String(error)
-        console.error(`Receiver notify (updated) failed for ${request.id}: ${receiverError}`)
       }
 
       if (shouldNotify(payload.notify_requester_update) && requesterJid) {
@@ -791,12 +1233,15 @@ export function registerMessageRoutes(deps: RegisterMessageRoutesDeps) {
       }
 
       await saveTicketState(request.id, {
+        ...(previousState ?? {}),
         technician: currentTechnician,
         ticketStatus: ticketStatusForMessage,
         priority: priorityForMessage,
       })
 
-      res.status(200).json({ status: true, message: 'Webhook processed', receiverSent, receiverError })
+      res
+        .status(200)
+        .json({ status: true, message: 'Webhook processed', receiverSent, receiverError, receiverMeta: receiverPrecheck.receiverMeta })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       console.error(`ServiceDesk webhook failed: ${message}`)
