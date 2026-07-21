@@ -52,7 +52,18 @@ function addDaysUtc(date: Date, days: number): Date {
   return new Date(date.getTime() + days * 24 * 60 * 60_000)
 }
 
+function normalizeScheduleStatus(value: unknown): string | number | null {
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    return trimmed.length > 0 ? trimmed : null
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  return null
+}
+
 function isOnsite(status: unknown): boolean {
+  if (typeof status === 'number') return true
   if (typeof status !== 'string') return false
   return /^H\d*$/.test(status.trim().toUpperCase())
 }
@@ -111,8 +122,7 @@ async function main(): Promise<void> {
     const name = typeof personRaw === 'string' ? personRaw.trim() : String(personRaw ?? '').trim()
     if (!name) continue
 
-    const statusRaw = row?.[dateColumnIndex0]
-    const status = typeof statusRaw === 'string' && statusRaw.trim().length > 0 ? statusRaw.trim() : null
+    const status = normalizeScheduleStatus(row?.[dateColumnIndex0])
 
     if (shouldExclude(name)) {
       excluded.push({ name, status })
@@ -154,4 +164,3 @@ main().catch((error) => {
   console.error(JSON.stringify({ status: false, message }))
   process.exitCode = 1
 })
-

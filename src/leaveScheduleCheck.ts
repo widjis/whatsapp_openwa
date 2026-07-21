@@ -2,8 +2,10 @@ import fs from 'node:fs'
 import XLSX from 'xlsx'
 import type { WorkSheet } from 'xlsx'
 
+export type LeaveScheduleStatus = string | number | null
+
 export type LeaveScheduleEntry = {
-  status: string | null
+  status: LeaveScheduleStatus
   onsite: boolean
   role: 'technician' | 'supervisor' | 'superintendent'
 }
@@ -23,9 +25,35 @@ export function normalizeScheduleBaseName(input: string): string {
   return normalizeName(cleaned)
 }
 
-function isOnsite(status: unknown): boolean {
+function normalizeScheduleStatus(value: unknown): LeaveScheduleStatus {
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    return trimmed.length > 0 ? trimmed : null
+  }
+
+  // The workbook uses numeric day counters for some local rotation rows.
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+
+  return null
+}
+
+function isOnsite(status: LeaveScheduleStatus): boolean {
+  if (typeof status === 'number') return true
   if (typeof status !== 'string') return false
   return /^H\d*$/.test(status.trim().toUpperCase())
+}
+
+function inferRoleFromRow(row: unknown[]): LeaveScheduleEntry['role'] {
+  const rosterRaw = typeof row[3] === 'string' ? row[3].trim().toLowerCase() : String(row[3] ?? '').trim().toLowerCase()
+  const titleRaw = typeof row[8] === 'string' ? row[8].trim().toLowerCase() : String(row[8] ?? '').trim().toLowerCase()
+
+  if (titleRaw.includes('superintendent')) return 'superintendent'
+  if (titleRaw.includes('supervisor')) return 'supervisor'
+
+  // In the current workbook, roster 5:2 is used for supervisor-and-up rows.
+  if (rosterRaw === '5:2') return 'supervisor'
+
+  return 'technician'
 }
 
 function parseYyyyMmDd(input: string): Date | null {
@@ -97,6 +125,12 @@ function jaccardSimilarity(aTokens: string[], bTokens: string[]): number {
   return union === 0 ? 0 : intersection / union
 }
 
+function tokensContainedInOrderlessSubset(targetTokens: string[], candidateTokens: string[]): boolean {
+  if (targetTokens.length === 0) return false
+  const candidateSet = new Set(candidateTokens)
+  return targetTokens.every((token) => candidateSet.has(token))
+}
+
 function getRows(sheet: WorkSheet): unknown[][] {
   const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null }) as unknown
   if (!Array.isArray(raw)) return []
@@ -145,9 +179,6 @@ export function buildLeaveScheduleIndexForDate(args: {
   if (!column) throw new Error(`Date not found in schedule: ${isoDateUtc(targetDate)}`)
 
   const result = new Map<string, LeaveScheduleEntry>()
-  const superintendentCount = Math.max(0, Math.floor(args.superintendentCount ?? 0))
-  const supervisorCount = Math.max(0, Math.floor(args.supervisorCount ?? 0))
-  let personIndex = 0
   const maxRow = Math.min(rows.length, args.dataStartRow1Based - 1 + 500)
   for (let rowIndex = args.dataStartRow1Based - 1; rowIndex < maxRow; rowIndex += 1) {
     const row = rows[rowIndex]
@@ -160,16 +191,8 @@ export function buildLeaveScheduleIndexForDate(args: {
     const key = normalizeScheduleBaseName(personName)
     if (!key || result.has(key)) continue
 
-    const statusRaw = row[column - 1]
-    const status = typeof statusRaw === 'string' && statusRaw.trim().length > 0 ? statusRaw.trim() : null
-    personIndex += 1
-
-    const role =
-      superintendentCount > 0 && personIndex <= superintendentCount
-        ? 'superintendent'
-        : supervisorCount > 0 && personIndex <= superintendentCount + supervisorCount
-          ? 'supervisor'
-          : 'technician'
+    const status = normalizeScheduleStatus(row[column - 1])
+    const role = inferRoleFromRow(row)
 
     result.set(key, { status, onsite: isOnsite(status), role })
   }
@@ -191,6 +214,29 @@ export function resolveLeaveScheduleEntry(args: {
   if (!args.allowFuzzy) return null
 
   const targetTokens = tokenizeKey(key)
+  let containmentBestKey: string | null = null
+  let containmentBestExtraTokens = Number.POSITIVE_INFINITY
+  let containmentBestCount = 0
+
+  for (const candidateKey of args.scheduleIndex.keys()) {
+    const candidateTokens = tokenizeKey(candidateKey)
+    if (!tokensContainedInOrderlessSubset(targetTokens, candidateTokens)) continue
+
+    const extraTokens = Math.max(0, candidateTokens.length - targetTokens.length)
+    if (extraTokens < containmentBestExtraTokens) {
+      containmentBestExtraTokens = extraTokens
+      containmentBestKey = candidateKey
+      containmentBestCount = 1
+    } else if (extraTokens === containmentBestExtraTokens) {
+      containmentBestCount += 1
+    }
+  }
+
+  if (containmentBestKey && containmentBestCount === 1) {
+    const containmentEntry = args.scheduleIndex.get(containmentBestKey)
+    if (containmentEntry) return { matchedKey: containmentBestKey, entry: containmentEntry }
+  }
+
   let bestKey: string | null = null
   let bestScore = 0
   let bestCount = 0

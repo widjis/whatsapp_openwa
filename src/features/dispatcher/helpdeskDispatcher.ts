@@ -17,6 +17,7 @@ import {
   buildLeaveScheduleIndexForDate,
   getTodayIsoDateForOffsetHours,
   resolveLeaveScheduleEntry,
+  type LeaveScheduleStatus,
 } from '../../leaveScheduleCheck.js'
 import crypto from 'node:crypto'
 import OpenAI from 'openai'
@@ -89,12 +90,29 @@ type DispatcherCandidate = {
   reason: string
   targetGroupName?: string
   targetIctTechnician?: string
+  leaveFilter?: {
+    targetGroupName: string
+    considered: number
+    eligible: number
+    pool: Array<{
+      ictTechnician: string
+      phone: string
+      currentLoad: number
+      found: boolean
+      matchedKey: string | null
+      status: LeaveScheduleStatus
+      onsite: boolean
+      role: LeaveStatus['role']
+      eligible: boolean
+      blockedReason: string | null
+    }>
+  }
 }
 
 type LeaveStatus = {
   found: boolean
   onsite: boolean
-  status: string | null
+  status: LeaveScheduleStatus
   matchedKey: string | null
   role: 'technician' | 'supervisor' | 'superintendent' | null
   eligible: boolean
@@ -123,8 +141,9 @@ type PlannedAction =
       targetIctTechnician?: string
       reason: string
       notify: boolean
+      leaveFilter?: DispatcherCandidate['leaveFilter']
     }
-  | { kind: 'skip'; ticketId: string; reason: string }
+  | { kind: 'skip'; ticketId: string; reason: string; leaveFilter?: DispatcherCandidate['leaveFilter'] }
 
 function getOptionalEnv(name: string): string | undefined {
   const raw = process.env[name]?.trim()
@@ -209,7 +228,7 @@ function buildConfig(): DispatcherConfig {
       getOptionalEnv('DISPATCHER_LEAVE_SCHEDULE_XLSX_PATH') ?? `${dataDir}/leave/leave-schedule.xlsx`,
     leaveScheduleSheetName: getOptionalEnv('DISPATCHER_LEAVE_SCHEDULE_SHEET') ?? 'Human Resource',
     leaveScheduleTzOffsetHours: Math.floor(parseNumberEnv('DISPATCHER_LEAVE_SCHEDULE_TZ_OFFSET_HOURS', 8)),
-    leaveScheduleDateShiftDays: Math.floor(parseNumberEnv('DISPATCHER_LEAVE_SCHEDULE_DATE_SHIFT_DAYS', 1)),
+    leaveScheduleDateShiftDays: Math.floor(parseNumberEnv('DISPATCHER_LEAVE_SCHEDULE_DATE_SHIFT_DAYS', 0)),
     leaveScheduleAllowFuzzy: parseBooleanEnv('DISPATCHER_LEAVE_SCHEDULE_FUZZY', true),
     leaveScheduleSimilarityThreshold: Math.min(1, Math.max(0, parseNumberEnv('DISPATCHER_LEAVE_SCHEDULE_SIM_THRESHOLD', 0.9))),
     leaveScheduleSuperintendentCount: Math.max(0, Math.floor(parseNumberEnv('DISPATCHER_LEAVE_SCHEDULE_SUPERINTENDENT_COUNT', 0))),
@@ -252,6 +271,40 @@ function resolveContactsForGroup(groupName: string, contacts: TechnicianContact[
 
 function groupKey(groupName: string): string {
   return groupName.trim().toLowerCase()
+}
+
+function buildLeaveFilterDiagnostics(args: {
+  groupName: string
+  contacts: TechnicianContact[]
+  loadByGroupIct: Map<string, Map<string, number>>
+  leaveStatusByIctName: LeaveStatusByIctName | null
+}): DispatcherCandidate['leaveFilter'] | undefined {
+  const groupContacts = resolveContactsForGroup(args.groupName, args.contacts)
+  if (groupContacts.length === 0) return undefined
+
+  const loadByIctTechnician = args.loadByGroupIct.get(groupKey(args.groupName)) ?? new Map<string, number>()
+  const pool = groupContacts.map((contact) => {
+    const leave = args.leaveStatusByIctName?.get(contact.ict_name)
+    return {
+      ictTechnician: contact.ict_name,
+      phone: contact.phone,
+      currentLoad: loadByIctTechnician.get(contact.ict_name) ?? 0,
+      found: leave?.found ?? false,
+      matchedKey: leave?.matchedKey ?? null,
+      status: leave?.status ?? null,
+      onsite: leave?.onsite ?? false,
+      role: leave?.role ?? null,
+      eligible: leave?.eligible ?? !args.leaveStatusByIctName,
+      blockedReason: leave?.blockedReason ?? null,
+    }
+  })
+
+  return {
+    targetGroupName: args.groupName,
+    considered: pool.length,
+    eligible: pool.filter((item) => item.eligible).length,
+    pool,
+  }
 }
 
 function hashToUint32(input: string): number {
@@ -622,6 +675,12 @@ async function planAction(args: {
       targetIctTechnician: isIctTechnicianMissing ? picked?.ict_name : undefined,
       reason: 'mirror_group_to_technician',
       notify: false,
+      leaveFilter: buildLeaveFilterDiagnostics({
+        groupName: serviceDeskGroupName,
+        contacts,
+        loadByGroupIct,
+        leaveStatusByIctName,
+      }),
     }
   }
 
@@ -642,6 +701,12 @@ async function planAction(args: {
       targetIctTechnician: isIctTechnicianMissing ? picked?.ict_name : undefined,
       reason: decision.reason,
       notify: config.notifyMode === 'direct',
+      leaveFilter: buildLeaveFilterDiagnostics({
+        groupName: decision.targetGroupName,
+        contacts,
+        loadByGroupIct,
+        leaveStatusByIctName,
+      }),
     }
   }
 
@@ -655,9 +720,31 @@ async function planAction(args: {
       leaveStatusByIctName,
     })
     if (picked) {
-      return { kind: 'update', ticketId, targetIctTechnician: picked.ict_name, reason: 'assign_ict_by_load', notify: false }
+      return {
+        kind: 'update',
+        ticketId,
+        targetIctTechnician: picked.ict_name,
+        reason: 'assign_ict_by_load',
+        notify: false,
+        leaveFilter: buildLeaveFilterDiagnostics({
+          groupName,
+          contacts,
+          loadByGroupIct,
+          leaveStatusByIctName,
+        }),
+      }
     }
-    return { kind: 'skip', ticketId, reason: 'no_available_ict_after_leave_filter' }
+    return {
+      kind: 'skip',
+      ticketId,
+      reason: 'no_available_ict_after_leave_filter',
+      leaveFilter: buildLeaveFilterDiagnostics({
+        groupName,
+        contacts,
+        loadByGroupIct,
+        leaveStatusByIctName,
+      }),
+    }
   }
 
   return { kind: 'skip', ticketId, reason: 'already_assigned_or_not_actionable' }
@@ -944,7 +1031,7 @@ async function runScanOnce(args: { config: DispatcherConfig; messaging: Messagin
     })
 
     if (action.kind === 'skip') {
-      candidates.push({ ...baseCandidate, reason: action.reason })
+      candidates.push({ ...baseCandidate, reason: action.reason, leaveFilter: action.leaveFilter })
       stats.skipped += 1
       continue
     }
@@ -954,6 +1041,7 @@ async function runScanOnce(args: { config: DispatcherConfig; messaging: Messagin
       reason: action.reason,
       targetGroupName: action.targetGroupName,
       targetIctTechnician: action.targetIctTechnician,
+      leaveFilter: action.leaveFilter,
     }
     candidates.push(candidate)
     stats.matched += 1
@@ -1174,6 +1262,7 @@ export function startHelpdeskDispatcher(args: { messaging: MessagingService }): 
               reason: candidate.reason,
               hasTechnician: candidate.hasTechnician,
               hasIctTechnician: candidate.hasIctTechnician,
+              leaveFilter: candidate.leaveFilter,
             })),
           },
           null,
