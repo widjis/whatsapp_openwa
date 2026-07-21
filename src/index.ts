@@ -190,7 +190,7 @@ const inboundCommandService = new InboundCommandService(
   ldapService,
   config.allowedPhoneNumbers
 )
-const n8nIntegration = new N8nIntegrationService(messagingService, config.n8n)
+const n8nIntegration = new N8nIntegrationService(messagingService, config.n8n, sessionService)
 const pollingEnabled = parseBoolean(process.env.OPENWA_POLLING_ENABLED) === true
 const pollingIntervalMs = parseIntEnv('OPENWA_POLLING_INTERVAL_MS', 1500)
 const pollingLimit = parseIntEnv('OPENWA_POLLING_LIMIT', 50)
