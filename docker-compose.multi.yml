@@ -1,0 +1,33 @@
+name: whatsapp-openwa-multi
+
+x-whatsapp-openwa-base: &whatsapp-openwa-base
+  build:
+    context: .
+  env_file:
+    - .env
+  restart: always
+
+services:
+  whatsapp-openwa-8192:
+    <<: *whatsapp-openwa-base
+    environment:
+      DATA_DIR: /app/data
+      PORT: 8192
+    ports:
+      - "8192:8192"
+    volumes:
+      - ./data-8192:/app/data
+
+  whatsapp-openwa-8193:
+    <<: *whatsapp-openwa-base
+    environment:
+      DATA_DIR: /app/data
+      PORT: 8193
+      DISPATCHER_ENABLED: "false"
+      N8N_ENABLED: "false"
+      OPENAI_API_KEY: ""
+    ports:
+      - "8193:8193"
+    volumes:
+      - ./data-8193:/app/data
+

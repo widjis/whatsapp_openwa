@@ -62,6 +62,8 @@ type DispatcherConfig = {
   leaveScheduleDateShiftDays: number
   leaveScheduleAllowFuzzy: boolean
   leaveScheduleSimilarityThreshold: number
+  leaveScheduleSuperintendentCount: number
+  leaveScheduleSupervisorCount: number
 }
 
 type DispatcherStats = {
@@ -94,6 +96,9 @@ type LeaveStatus = {
   onsite: boolean
   status: string | null
   matchedKey: string | null
+  role: 'technician' | 'supervisor' | 'superintendent' | null
+  eligible: boolean
+  blockedReason: string | null
 }
 
 type LeaveStatusByIctName = Map<string, LeaveStatus>
@@ -207,6 +212,8 @@ function buildConfig(): DispatcherConfig {
     leaveScheduleDateShiftDays: Math.floor(parseNumberEnv('DISPATCHER_LEAVE_SCHEDULE_DATE_SHIFT_DAYS', 1)),
     leaveScheduleAllowFuzzy: parseBooleanEnv('DISPATCHER_LEAVE_SCHEDULE_FUZZY', true),
     leaveScheduleSimilarityThreshold: Math.min(1, Math.max(0, parseNumberEnv('DISPATCHER_LEAVE_SCHEDULE_SIM_THRESHOLD', 0.9))),
+    leaveScheduleSuperintendentCount: Math.max(0, Math.floor(parseNumberEnv('DISPATCHER_LEAVE_SCHEDULE_SUPERINTENDENT_COUNT', 0))),
+    leaveScheduleSupervisorCount: Math.max(0, Math.floor(parseNumberEnv('DISPATCHER_LEAVE_SCHEDULE_SUPERVISOR_COUNT', 0))),
   }
 }
 
@@ -271,7 +278,7 @@ function pickIctTechnicianByLoad(args: {
   for (const contact of groupContacts) {
     if (args.leaveStatusByIctName) {
       const leave = args.leaveStatusByIctName.get(contact.ict_name)
-      if (!leave || !leave.found || !leave.onsite) continue
+      if (!leave || !leave.found || !leave.eligible) continue
     }
 
     const load = loadByIctTechnician.get(contact.ict_name) ?? 0
@@ -714,6 +721,8 @@ function loadLeaveStatusByIctName(config: DispatcherConfig, contacts: Technician
       dateHeaderRow1Based: 9,
       dataStartRow1Based: 10,
       dateShiftDays: config.leaveScheduleDateShiftDays,
+      superintendentCount: config.leaveScheduleSuperintendentCount,
+      supervisorCount: config.leaveScheduleSupervisorCount,
     })
 
     const byIct: LeaveStatusByIctName = new Map()
@@ -727,15 +736,30 @@ function loadLeaveStatusByIctName(config: DispatcherConfig, contacts: Technician
       })
 
       if (!match) {
-        byIct.set(contact.ict_name, { found: false, onsite: false, status: null, matchedKey: null })
+        byIct.set(contact.ict_name, {
+          found: false,
+          onsite: false,
+          status: null,
+          matchedKey: null,
+          role: null,
+          eligible: false,
+          blockedReason: 'not_found',
+        })
         continue
       }
+
+      const role = match.entry.role ?? 'technician'
+      const eligible = match.entry.onsite && role === 'technician'
+      const blockedReason = !match.entry.onsite ? 'offsite' : role !== 'technician' ? `role:${role}` : null
 
       byIct.set(contact.ict_name, {
         found: true,
         onsite: match.entry.onsite,
         status: match.entry.status,
         matchedKey: match.matchedKey,
+        role,
+        eligible,
+        blockedReason,
       })
     }
 

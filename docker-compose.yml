@@ -1,0 +1,14 @@
+services:
+  whatsapp-openwa:
+    build:
+      context: .
+    env_file:
+      - .env
+    environment:
+      DATA_DIR: /app/data
+    ports:
+      - "8192:8192"
+    volumes:
+      - ./data:/app/data
+    restart: always
+

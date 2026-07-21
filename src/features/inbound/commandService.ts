@@ -29,6 +29,7 @@ import {
   getTodayIsoDateForOffsetHours,
   normalizeScheduleBaseName,
   resolveLeaveScheduleEntry,
+  type LeaveScheduleEntry,
 } from '../../leaveScheduleCheck.js'
 import { extractDigitsFromJid, normalizePhoneDigits, phoneNumberFormatter } from '../../utils/phone.js'
 
@@ -512,7 +513,7 @@ function isTokenLikelyTypoMatch(sourceToken: string, candidateToken: string): bo
 }
 
 function resolveLeaveMappingForContact(args: {
-  scheduleIndex: Map<string, { status: string | null; onsite: boolean }>
+  scheduleIndex: Map<string, LeaveScheduleEntry>
   scheduleKeys: string[]
   sourceName: string
   allowFuzzy: boolean

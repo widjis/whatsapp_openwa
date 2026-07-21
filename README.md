@@ -33,3 +33,12 @@ At the moment, the repository is in the bootstrap and validation stage for the O
 
 ## Working Rule
 Reproduce the reference behavior, but do not copy transport-specific debt into the new codebase.
+
+## Docker
+- Single instance:
+  - `docker compose up --build`
+  - Exposes `http://localhost:8192/health`
+  - Persists state under `./data` (mounted to `/app/data`)
+- Multi instance (separate data dirs):
+  - `docker compose -f docker-compose.multi.yml up --build`
+  - Exposes `8192` and `8193`

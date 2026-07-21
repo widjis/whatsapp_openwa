@@ -43,7 +43,7 @@ function normalizeScopeString(scope: string): string {
   const unique = Array.from(
     new Set(
       scope
-        .split(/\s+/)
+        .split(/[\s,]+/)
         .map((value) => value.trim())
         .filter((value) => value.length > 0)
     )
@@ -54,7 +54,7 @@ function normalizeScopeString(scope: string): string {
 
 function ensureOfflineAccessScope(scope: string): string {
   const parts = scope
-    .split(/\s+/)
+    .split(/[\s,]+/)
     .map((value) => value.trim())
     .filter((value) => value.length > 0)
   if (!parts.includes('offline_access')) parts.push('offline_access')
@@ -64,14 +64,15 @@ function ensureOfflineAccessScope(scope: string): string {
 function hasAllScopes(args: { cachedScope: string; requiredScope: string }): boolean {
   const cached = new Set(
     args.cachedScope
-      .split(/\s+/)
+      .split(/[\s,]+/)
       .map((value) => value.trim())
       .filter((value) => value.length > 0)
   )
   const required = args.requiredScope
-    .split(/\s+/)
+    .split(/[\s,]+/)
     .map((value) => value.trim())
     .filter((value) => value.length > 0)
+    .filter((value) => value !== 'offline_access')
   if (required.length === 0) return false
   return required.every((value) => cached.has(value))
 }

@@ -5,6 +5,7 @@ import type { WorkSheet } from 'xlsx'
 export type LeaveScheduleEntry = {
   status: string | null
   onsite: boolean
+  role: 'technician' | 'supervisor' | 'superintendent'
 }
 
 export type LeaveScheduleMatch = {
@@ -124,6 +125,8 @@ export function buildLeaveScheduleIndexForDate(args: {
   dateHeaderRow1Based: number
   dataStartRow1Based: number
   dateShiftDays: number
+  superintendentCount?: number
+  supervisorCount?: number
 }): Map<string, LeaveScheduleEntry> {
   if (!fs.existsSync(args.xlsxPath)) throw new Error(`XLSX not found: ${args.xlsxPath}`)
 
@@ -142,6 +145,9 @@ export function buildLeaveScheduleIndexForDate(args: {
   if (!column) throw new Error(`Date not found in schedule: ${isoDateUtc(targetDate)}`)
 
   const result = new Map<string, LeaveScheduleEntry>()
+  const superintendentCount = Math.max(0, Math.floor(args.superintendentCount ?? 0))
+  const supervisorCount = Math.max(0, Math.floor(args.supervisorCount ?? 0))
+  let personIndex = 0
   const maxRow = Math.min(rows.length, args.dataStartRow1Based - 1 + 500)
   for (let rowIndex = args.dataStartRow1Based - 1; rowIndex < maxRow; rowIndex += 1) {
     const row = rows[rowIndex]
@@ -156,7 +162,16 @@ export function buildLeaveScheduleIndexForDate(args: {
 
     const statusRaw = row[column - 1]
     const status = typeof statusRaw === 'string' && statusRaw.trim().length > 0 ? statusRaw.trim() : null
-    result.set(key, { status, onsite: isOnsite(status) })
+    personIndex += 1
+
+    const role =
+      superintendentCount > 0 && personIndex <= superintendentCount
+        ? 'superintendent'
+        : supervisorCount > 0 && personIndex <= superintendentCount + supervisorCount
+          ? 'supervisor'
+          : 'technician'
+
+    result.set(key, { status, onsite: isOnsite(status), role })
   }
 
   return result
