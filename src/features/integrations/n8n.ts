@@ -220,7 +220,17 @@ function mapTechnicianProfile(contact: TechnicianContact | undefined): N8nPayloa
 }
 
 function getBufferKey(event: InboundMessageEvent): string {
-  return `${event.chatId}|${event.senderPhone ?? event.senderId}`;
+  return `${event.chatId}|${normalizeActorKey(event.senderPhone ?? event.senderId)}`;
+}
+
+function getBufferActorKey(value: string | null | undefined): string {
+  const digits = extractDigits(value?.trim() ?? '');
+  if (digits) return digits;
+  return value?.trim().toLowerCase() ?? 'unknown';
+}
+
+function normalizeActorKey(value: string | null | undefined): string {
+  return getBufferActorKey(value);
 }
 
 function inferQuotedType(record: Record<string, unknown>): QuotedMessageInfo['type'] {
@@ -390,7 +400,8 @@ export class N8nIntegrationService {
   }
 
   private getPresenceKey(args: { chatId: string; participantId: string; participantPhone: string | null }): string {
-    return `${args.chatId}|${args.participantPhone ?? args.participantId}`;
+    const actorSeed = args.participantPhone ?? args.participantId;
+    return `${args.chatId}|${normalizeActorKey(actorSeed)}`;
   }
 
   private isPresenceTyping(presence: string): boolean {
@@ -705,6 +716,7 @@ export class N8nIntegrationService {
         participantId: update.participantId,
         participantPhone: update.participantPhone,
       });
+      const debugActorKey = normalizeActorKey(update.participantPhone ?? update.participantId);
       const isTyping = this.isPresenceTyping(update.presence);
       this.presenceStates.set(key, { isTyping, lastUpdateMs: Date.now() });
 
@@ -721,6 +733,7 @@ export class N8nIntegrationService {
             chatId: event.chatId,
             participantId: update.participantId,
             participantPhone: update.participantPhone,
+            actorKey: debugActorKey,
             presence: update.presence,
             isTyping,
             bufferCount: buffer.items.length,
