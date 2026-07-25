@@ -289,14 +289,14 @@ function extractQuotedMessage(raw: unknown): QuotedMessageInfo | null {
 
 async function readResponsePayload(response: Response): Promise<unknown> {
   const contentType = response.headers.get('content-type') ?? '';
-  if (contentType.includes('application/json')) {
-    try {
-      return await response.json();
-    } catch {
-      return await response.text();
-    }
+  const bodyText = await response.text();
+  if (!contentType.includes('application/json')) return bodyText;
+
+  try {
+    return JSON.parse(bodyText);
+  } catch {
+    return bodyText;
   }
-  return await response.text();
 }
 
 export class N8nIntegrationService {
