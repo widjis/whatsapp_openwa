@@ -157,8 +157,16 @@ export class DirectoryService {
     const query = name.trim().toLowerCase();
     if (!query) return null;
 
-    const findMatch = (groups: GroupSummary[]): GroupSummary | undefined =>
-      groups.find((group) => group.subject.toLowerCase().includes(query));
+    const findMatch = (groups: GroupSummary[]): GroupSummary | undefined => {
+      const exact = groups.find((group) => group.subject.trim().toLowerCase() === query);
+      if (exact) return exact;
+
+      const partial = groups.filter((group) => group.subject.toLowerCase().includes(query));
+      if (partial.length > 1) {
+        throw new Error(`Group name is ambiguous: ${name}. Matches: ${partial.map((group) => group.subject).join(', ')}`);
+      }
+      return partial[0];
+    };
 
     const cached = await this.listGroups();
     const cachedMatch = findMatch(cached);

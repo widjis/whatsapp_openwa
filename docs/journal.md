@@ -1,3 +1,31 @@
+## [2026-07-30] Add safe outbound terminal logs
+- Change:
+  - Added `[outbound]` terminal events to `/send-message` and `/send-group-message` for received, rejected, succeeded, and failed outcomes.
+  - Added per-request UUID correlation, message type, masked target, provider message id on success, mention count for group sends, error type, and elapsed time.
+  - Excluded message/caption contents, media payloads, uploaded file contents, and full direct phone numbers from these logs.
+- Reason:
+  - Make outbound delivery and validation failures observable from the application terminal without exposing message bodies or full phone identifiers.
+- Impact:
+  - Operators can correlate the full lifecycle of each direct or group send using `requestId`.
+  - Verification completed with a route smoke test showing success and rejection log events, followed by successful `npm run lint`, `npm run build`, and `git diff --check`.
+  - `docs/openapi.yaml` was reviewed but not changed because the HTTP contract is unchanged.
+
+## [2026-07-30] Harden direct and group outbound routes
+- Change:
+  - Restored the reference requirement that `/send-message` contain text or an image source.
+  - Added strict HTTP(S) image URL and non-empty base64 validation.
+  - Ensured temporary uploads are removed on validation, directory lookup, provider failure, and multi-file group requests.
+  - Changed group-name lookup to prefer exact matches and reject ambiguous partial matches.
+  - Tightened group JID and mention validation and mapped OpenWA failures to meaningful HTTP status codes.
+  - Updated `docs/openapi.yaml` for the changed validation and error contracts.
+- Reason:
+  - Prevent empty direct sends, corrupt image payloads, silently dropped mentions, accidental group targeting, and orphaned upload files.
+- Impact:
+  - Existing valid direct and group requests retain their response envelope and OpenWA send paths.
+  - Ambiguous group names and previously tolerated invalid inputs now return `422`.
+  - Verification completed with route-level smoke tests, `npm run lint`, `npm run build`, and `git diff --check`.
+  - Live OpenWA operator verification remains open in Phase 2.
+
 ## [2026-07-12] Wire normalized reaction events into root claim flow
 - Change:
   - Extended `src/features/inbound/commandService.ts` with normalized `message.reaction` handling for allowed-group gating, duplicate-event suppression, `@lid` actor phone resolution, tracked-message lookup, claim, and unclaim.

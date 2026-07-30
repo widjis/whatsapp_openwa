@@ -1,10 +1,12 @@
 import fs from 'node:fs'
 import OpenAI from 'openai'
+import { randomUUID } from 'node:crypto'
 import type { Express, Request, Response } from 'express'
 import { body, validationResult } from 'express-validator'
 import type { Multer } from 'multer'
 import type { DirectoryService } from '../../channel/directoryService.js'
 import type { MessagingService } from '../../channel/messagingService.js'
+import { OpenwaClientError } from '../../channel/openwaClient.js'
 import {
   assignTechnicianToRequest,
   buildTicketLink,
@@ -90,14 +92,14 @@ function pickUploadedFile(files: unknown, fieldName: string): UploadedFile | und
   }
 }
 
-function parseMentionedJids(raw: unknown): string[] {
+function parseMentionedJids(raw: unknown): string[] | null {
   if (typeof raw !== 'string' || raw.trim().length < 1) return []
 
   try {
     const parsed: unknown = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return []
+    if (!Array.isArray(parsed)) return null
 
-    return parsed
+    const values = parsed
       .map((item) => {
         if (typeof item === 'string') return item
         if (item && typeof item === 'object') {
@@ -109,9 +111,64 @@ function parseMentionedJids(raw: unknown): string[] {
       })
       .filter((item): item is string => Boolean(item))
       .map(ensureMentionJid)
+    return values.length === parsed.length && values.every((item) => item.trim().length > 0) ? values : null
   } catch {
-    return []
+    return null
   }
+}
+
+function isValidBase64(value: string): boolean {
+  const normalized = value.replace(/\s+/g, '')
+  if (!normalized || normalized.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(normalized)) return false
+  const decoded = Buffer.from(normalized, 'base64')
+  return decoded.length > 0 && decoded.toString('base64').replace(/=+$/, '') === normalized.replace(/=+$/, '')
+}
+
+async function removeUploadedFiles(paths: Array<string | undefined>): Promise<void> {
+  await Promise.all(paths.filter((item): item is string => Boolean(item)).map((item) => fs.promises.unlink(item).catch(() => undefined)))
+}
+
+function respondSendError(res: Response, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error)
+  if (!(error instanceof OpenwaClientError)) {
+    res.status(500).json({ status: false, message })
+    return
+  }
+
+  const status =
+    error.category === 'invalid_request'
+      ? 422
+      : error.category === 'rate_limited'
+        ? 429
+        : error.category === 'not_ready' || error.category === 'provider_error'
+          ? 503
+          : 502
+  res.status(status).json({ status: false, message })
+}
+
+function maskOutboundTarget(value: string): string {
+  if (value.endsWith('@g.us')) {
+    const local = value.slice(0, -'@g.us'.length)
+    return `${local.slice(0, 4)}***@g.us`
+  }
+
+  const [local = value, domain] = value.split('@', 2)
+  const digits = local.replace(/\D/g, '')
+  const masked = digits.length > 5 ? `${digits.slice(0, 3)}***${digits.slice(-2)}` : '***'
+  return domain ? `${masked}@${domain}` : masked
+}
+
+function logOutbound(
+  level: 'info' | 'error',
+  event: string,
+  details: Record<string, string | number | boolean | null | undefined>
+): void {
+  const line = `[outbound] ${JSON.stringify({ event, ...details })}`
+  if (level === 'error') {
+    console.error(line)
+    return
+  }
+  console.log(line)
 }
 
 function getValidationError(res: Response, req: Request): boolean {
@@ -346,7 +403,7 @@ async function resolveGroupChatId(args: {
   name?: string
 }): Promise<GroupResolveResult> {
   const id = args.id?.trim()
-  if (id && id.includes('@g.us')) return { ok: true, chatId: id }
+  if (id && id.endsWith('@g.us')) return { ok: true, chatId: id }
   if (id && /^\d+$/.test(id)) return { ok: true, chatId: `${id}@g.us` }
 
   const query = (args.name ?? '').trim()
@@ -358,7 +415,10 @@ async function resolveGroupChatId(args: {
     return { ok: true, chatId: groupId }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    return { ok: false, reason: 'error', message }
+    if (message.startsWith('Group name is ambiguous:')) {
+      return { ok: false, reason: 'not_found', message }
+    }
+    throw error
   }
 }
 
@@ -745,10 +805,61 @@ export function registerMessageRoutes(deps: RegisterMessageRoutesDeps) {
       body('imageBuffer')
         .optional()
         .isString()
-        .withMessage('imageBuffer must be a base64 string'),
+        .withMessage('imageBuffer must be a base64 string')
+        .bail()
+        .custom((value) => isValidBase64(value))
+        .withMessage('imageBuffer must contain valid, non-empty base64 data'),
+      body('imageUrl')
+        .optional()
+        .isURL({ protocols: ['http', 'https'], require_protocol: true })
+        .withMessage('imageUrl must be a valid HTTP or HTTPS URL'),
+      body().custom((_value, { req }) => {
+        const request = req as Request
+        const record = request.body as Record<string, unknown>
+        const hasText = typeof record.message === 'string' && record.message.trim().length > 0
+        const hasFile = Boolean(request.file)
+        const hasImageUrl = typeof record.imageUrl === 'string' && record.imageUrl.trim().length > 0
+        const hasImageBuffer = typeof record.imageBuffer === 'string' && record.imageBuffer.trim().length > 0
+        if (!hasText && !hasFile && !hasImageUrl && !hasImageBuffer) {
+          throw new Error('Either message text or image (file, URL, or buffer) must be provided')
+        }
+        return true
+      }),
     ],
     async (req: Request, res: Response) => {
-      if (getValidationError(res, req)) return
+      const requestId = randomUUID()
+      const startedAt = Date.now()
+      const requestedNumber =
+        req.body && typeof req.body === 'object' && typeof (req.body as Record<string, unknown>).number === 'string'
+          ? ((req.body as Record<string, unknown>).number as string)
+          : ''
+      const requestedJid = requestedNumber ? phoneNumberFormatter(requestedNumber) : ''
+      const messageType = req.file
+        ? 'image_upload'
+        : typeof req.body?.imageBuffer === 'string' && req.body.imageBuffer.length > 0
+          ? 'image_base64'
+          : typeof req.body?.imageUrl === 'string' && req.body.imageUrl.length > 0
+            ? 'image_url'
+            : 'text'
+
+      logOutbound('info', 'send_message_received', {
+        requestId,
+        messageType,
+        target: requestedJid ? maskOutboundTarget(requestedJid) : null,
+        hasCaption: typeof req.body?.message === 'string' && req.body.message.trim().length > 0,
+      })
+
+      if (getValidationError(res, req)) {
+        await removeUploadedFiles([req.file?.path])
+        logOutbound('info', 'send_message_rejected', {
+          requestId,
+          messageType,
+          target: requestedJid ? maskOutboundTarget(requestedJid) : null,
+          reason: 'validation_failed',
+          elapsedMs: Date.now() - startedAt,
+        })
+        return
+      }
 
       const body = req.body as SendMessageBody
       const jid = phoneNumberFormatter(body.number)
@@ -756,6 +867,14 @@ export function registerMessageRoutes(deps: RegisterMessageRoutesDeps) {
       try {
         const isRegistered = await deps.directory.checkRegisteredNumber(jid)
         if (!isRegistered) {
+          await removeUploadedFiles([req.file?.path])
+          logOutbound('info', 'send_message_rejected', {
+            requestId,
+            messageType,
+            target: maskOutboundTarget(jid),
+            reason: 'number_not_registered',
+            elapsedMs: Date.now() - startedAt,
+          })
           res.status(422).json({ status: false, message: 'The number is not registered' })
           return
         }
@@ -767,6 +886,13 @@ export function registerMessageRoutes(deps: RegisterMessageRoutesDeps) {
               chatId: jid,
               source: { kind: 'buffer', buffer: fileBuffer, mimetype: req.file.mimetype, filename: req.file.originalname },
               caption: body.message ?? '',
+            })
+            logOutbound('info', 'send_message_succeeded', {
+              requestId,
+              messageType,
+              target: maskOutboundTarget(response.remoteJid ?? jid),
+              messageId: response.messageId ?? null,
+              elapsedMs: Date.now() - startedAt,
             })
             res.status(200).json({ status: true, response })
           } finally {
@@ -782,6 +908,13 @@ export function registerMessageRoutes(deps: RegisterMessageRoutesDeps) {
             source: { kind: 'buffer', buffer: imageBuffer },
             caption: body.message ?? '',
           })
+          logOutbound('info', 'send_message_succeeded', {
+            requestId,
+            messageType,
+            target: maskOutboundTarget(response.remoteJid ?? jid),
+            messageId: response.messageId ?? null,
+            elapsedMs: Date.now() - startedAt,
+          })
           res.status(200).json({ status: true, response })
           return
         }
@@ -792,6 +925,13 @@ export function registerMessageRoutes(deps: RegisterMessageRoutesDeps) {
             source: { kind: 'url', url: body.imageUrl },
             caption: body.message ?? '',
           })
+          logOutbound('info', 'send_message_succeeded', {
+            requestId,
+            messageType,
+            target: maskOutboundTarget(response.remoteJid ?? jid),
+            messageId: response.messageId ?? null,
+            elapsedMs: Date.now() - startedAt,
+          })
           res.status(200).json({ status: true, response })
           return
         }
@@ -800,10 +940,24 @@ export function registerMessageRoutes(deps: RegisterMessageRoutesDeps) {
           chatId: jid,
           text: body.message ?? '',
         })
+        logOutbound('info', 'send_message_succeeded', {
+          requestId,
+          messageType,
+          target: maskOutboundTarget(response.remoteJid ?? jid),
+          messageId: response.messageId ?? null,
+          elapsedMs: Date.now() - startedAt,
+        })
         res.status(200).json({ status: true, response })
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        res.status(500).json({ status: false, message })
+        await removeUploadedFiles([req.file?.path])
+        logOutbound('error', 'send_message_failed', {
+          requestId,
+          messageType,
+          target: maskOutboundTarget(jid),
+          errorType: error instanceof Error ? error.name : 'UnknownError',
+          elapsedMs: Date.now() - startedAt,
+        })
+        respondSendError(res, error)
       }
     }
   )
@@ -844,10 +998,52 @@ export function registerMessageRoutes(deps: RegisterMessageRoutesDeps) {
       body('message').optional().isString(),
     ],
     async (req: Request, res: Response) => {
-      if (getValidationError(res, req)) return
+      const requestId = randomUUID()
+      const startedAt = Date.now()
+      const files = (req as Request & { files?: unknown }).files
+      const document = pickUploadedFile(files, 'document')
+      const image = pickUploadedFile(files, 'image')
+      const uploadedPaths = [document?.path, image?.path]
+      const messageType = document ? 'document' : image ? 'image' : 'text'
+      const requestedTarget =
+        typeof req.body?.id === 'string' && req.body.id.trim().length > 0
+          ? req.body.id.trim()
+          : typeof req.body?.name === 'string'
+            ? req.body.name.trim()
+            : ''
+
+      logOutbound('info', 'send_group_message_received', {
+        requestId,
+        messageType,
+        targetType: typeof req.body?.id === 'string' && req.body.id.trim().length > 0 ? 'id' : 'name',
+        target: requestedTarget.endsWith('@g.us') ? maskOutboundTarget(requestedTarget) : requestedTarget || null,
+        hasCaption: typeof req.body?.message === 'string' && req.body.message.trim().length > 0,
+      })
+
+      if (getValidationError(res, req)) {
+        await removeUploadedFiles(uploadedPaths)
+        logOutbound('info', 'send_group_message_rejected', {
+          requestId,
+          messageType,
+          reason: 'validation_failed',
+          elapsedMs: Date.now() - startedAt,
+        })
+        return
+      }
 
       const body = req.body as SendGroupMessageBody
       const mentionedJids = parseMentionedJids(body.mention)
+      if (mentionedJids === null) {
+        await removeUploadedFiles(uploadedPaths)
+        logOutbound('info', 'send_group_message_rejected', {
+          requestId,
+          messageType,
+          reason: 'invalid_mentions',
+          elapsedMs: Date.now() - startedAt,
+        })
+        res.status(422).json({ status: false, message: 'mention must be a JSON array of JIDs, phone strings, or phone objects' })
+        return
+      }
 
       try {
         const resolved = await resolveGroupChatId({
@@ -857,19 +1053,28 @@ export function registerMessageRoutes(deps: RegisterMessageRoutesDeps) {
         })
 
         if (!resolved.ok) {
+          logOutbound('info', 'send_group_message_rejected', {
+            requestId,
+            messageType,
+            reason: resolved.reason === 'not_found' ? 'group_not_resolved' : 'group_lookup_failed',
+            elapsedMs: Date.now() - startedAt,
+          })
           res.status(422).json({ status: false, message: resolved.message })
           return
         }
 
         const precheck = await precheckGroupSend({ directory: deps.directory, receiverJid: resolved.chatId })
         if (precheck.blockError) {
+          logOutbound('info', 'send_group_message_rejected', {
+            requestId,
+            messageType,
+            target: maskOutboundTarget(resolved.chatId),
+            reason: 'group_send_precheck_failed',
+            elapsedMs: Date.now() - startedAt,
+          })
           res.status(409).json({ status: false, message: precheck.blockError, receiverMeta: precheck.receiverMeta })
           return
         }
-
-        const files = (req as Request & { files?: unknown }).files
-        const document = pickUploadedFile(files, 'document')
-        const image = pickUploadedFile(files, 'image')
 
         if (document) {
           const buffer = await fs.promises.readFile(document.path)
@@ -881,6 +1086,14 @@ export function registerMessageRoutes(deps: RegisterMessageRoutesDeps) {
               fileName: document.originalname,
               caption: body.message ?? '',
               mentions: mentionedJids,
+            })
+            logOutbound('info', 'send_group_message_succeeded', {
+              requestId,
+              messageType,
+              target: maskOutboundTarget(response.remoteJid ?? resolved.chatId),
+              messageId: response.messageId ?? null,
+              mentionCount: mentionedJids.length,
+              elapsedMs: Date.now() - startedAt,
             })
             res.status(200).json({ status: true, response })
           } finally {
@@ -898,6 +1111,14 @@ export function registerMessageRoutes(deps: RegisterMessageRoutesDeps) {
               caption: body.message ?? '',
               mentions: mentionedJids,
             })
+            logOutbound('info', 'send_group_message_succeeded', {
+              requestId,
+              messageType,
+              target: maskOutboundTarget(response.remoteJid ?? resolved.chatId),
+              messageId: response.messageId ?? null,
+              mentionCount: mentionedJids.length,
+              elapsedMs: Date.now() - startedAt,
+            })
             res.status(200).json({ status: true, response })
           } finally {
             await fs.promises.unlink(image.path).catch(() => undefined)
@@ -910,10 +1131,25 @@ export function registerMessageRoutes(deps: RegisterMessageRoutesDeps) {
           text: body.message ?? 'Hello',
           mentions: mentionedJids,
         })
+        logOutbound('info', 'send_group_message_succeeded', {
+          requestId,
+          messageType,
+          target: maskOutboundTarget(response.remoteJid ?? resolved.chatId),
+          messageId: response.messageId ?? null,
+          mentionCount: mentionedJids.length,
+          elapsedMs: Date.now() - startedAt,
+        })
         res.status(200).json({ status: true, response })
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        res.status(500).json({ status: false, message })
+        logOutbound('error', 'send_group_message_failed', {
+          requestId,
+          messageType,
+          errorType: error instanceof Error ? error.name : 'UnknownError',
+          elapsedMs: Date.now() - startedAt,
+        })
+        respondSendError(res, error)
+      } finally {
+        await removeUploadedFiles(uploadedPaths)
       }
     }
   )

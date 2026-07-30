@@ -52,6 +52,19 @@
   - `src/features/dispatcher/helpdeskDispatcher.ts` dispatcher foundation with bounded ServiceDesk scanning, leave-aware ICT selection by open-ticket load, assignment updates through ServiceDesk API, reminder/backoff state via `src/features/tickets/ticketStateStore.ts`, actionable direct/digest notification flow with notification-hash dedupe, leave schedule loading from `src/leaveScheduleCheck.ts`, and delivery via root `MessagingService`
 - The items above are implementation progress only. They do not change the active phase away from Phase 1, and they must not be used as a substitute for missing payload validation evidence.
 - Latest command-port verification evidence:
+  - `/send-message` and `/send-group-message` now emit terminal events for received, rejected, succeeded, and failed outcomes with a per-request UUID, message type, elapsed time, and provider message id on success
+  - Direct phone and group JID targets are masked in outbound terminal logs; message text, captions, base64 content, uploaded file contents, and full phone numbers are not logged
+  - Route smoke verification confirmed direct/group success and validation rejection events appear under the `[outbound]` tag with matching request ids
+  - `npm run lint` and `npm run build` passed after adding outbound terminal logging
+  - `docs/openapi.yaml` was reviewed and did not require an update because request bodies, responses, status codes, and authorization behavior did not change
+  - `POST /send-message` hardening smoke test confirmed empty content, invalid image URL, and invalid/non-empty base64 are rejected with `422`, while a valid direct text send normalizes `08123456789` to `628123456789@c.us`
+  - `POST /send-group-message` hardening smoke test confirmed malformed mentions and ambiguous partial group names are rejected with `422`, while a valid group send preserves the resolved `12345@g.us` target and normalizes mention phone values to `@c.us`
+  - Outbound route upload cleanup now covers validation failures, lookup failures, provider failures, and the case where both image and document fields are uploaded
+  - `npm run lint` passed after hardening direct and group send validation, cleanup, group resolution, and provider error mapping
+  - `npm run build` passed after hardening direct and group send validation, cleanup, group resolution, and provider error mapping
+  - `git diff --check` passed for the outbound route hardening changes
+  - `docs/openapi.yaml` was updated in the same work item to document stricter input validation, ambiguous group handling, and mapped OpenWA error responses
+  - Phase 2 operator verification remains open because these checks used local route doubles rather than a new live OpenWA delivery
   - `npm run lint` passed after porting technician contacts, `/setlaps`, and `/technician`
   - `npm run build` passed after porting technician contacts, `/setlaps`, and `/technician`
   - Local runtime verification against a temporary copy of `data/technicianContacts.json` confirmed `/technician list`, `/technician view 3`, and `/setlaps technician 4 /a`

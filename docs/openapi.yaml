@@ -128,6 +128,7 @@ components:
             - openwaConfigured
     SendMessageRequest:
       type: object
+      description: At least one of `message`, `imageUrl`, `imageBuffer`, or multipart field `image` must be provided.
       properties:
         number:
           type: string
@@ -138,7 +139,8 @@ components:
           format: uri
         imageBuffer:
           type: string
-          description: Base64-encoded image payload.
+          minLength: 4
+          description: Valid, non-empty base64-encoded image payload.
       required:
         - number
     SendBulkMessageRequest:
@@ -159,6 +161,7 @@ components:
         - numbers
     SendGroupMessageRequest:
       type: object
+      description: The group must be identified by `id` or `name`. When `mention` is supplied it must contain a valid JSON array.
       properties:
         id:
           type: string
@@ -530,6 +533,24 @@ paths:
                 oneOf:
                   - $ref: '#/components/schemas/ValidationErrorEnvelope'
                   - $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: OpenWA rate limit reached
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '502':
+          description: OpenWA authentication or lookup failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: OpenWA session or provider is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         '500':
           $ref: '#/components/responses/InternalServerError'
   /send-bulk-message:
@@ -595,13 +616,31 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
         '422':
-          description: Validation failed or target group could not be resolved
+          description: Validation failed, target group could not be resolved, or the group name matched multiple groups
           content:
             application/json:
               schema:
                 oneOf:
                   - $ref: '#/components/schemas/ValidationErrorEnvelope'
                   - $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: OpenWA rate limit reached
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '502':
+          description: OpenWA authentication or lookup failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: OpenWA session or provider is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         '500':
           $ref: '#/components/responses/InternalServerError'
   /webhook:
