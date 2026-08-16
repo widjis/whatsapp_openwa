@@ -1,3 +1,17 @@
+## [2026-08-16] Add Docker deployment helper script
+- Change:
+  - Added `scripts/docker-deploy.sh` to standardize Docker deployment operations for this repository.
+  - The script supports `up`, `down`, `restart`, `logs`, `ps`, `build`, and `config` for both single-instance and multi-instance compose files.
+  - Updated `README.md` and `docs/deployment-and-environment.md` with the new helper usage and examples.
+- Reason:
+  - Reduce operator friction and make Docker deployment and troubleshooting commands consistent across single-instance and multi-instance runtime setups.
+- Impact:
+  - Operators can deploy, restart, inspect status, and follow logs through one stable wrapper script instead of remembering separate compose command variants.
+  - The script creates expected host data directories before startup and falls back to `docker-compose` if `docker compose` is not available.
+  - Normalized the root `.env` Docker comment syntax from `//` to `#` so Compose config parsing succeeds.
+  - Verification completed with `bash -n scripts/docker-deploy.sh`, `./scripts/docker-deploy.sh config`, and `git diff --check`.
+  - `docs/openapi.yaml` was reviewed but not changed because the HTTP contract is unchanged.
+
 ## [2026-07-30] Add safe outbound terminal logs
 - Change:
   - Added `[outbound]` terminal events to `/send-message` and `/send-group-message` for received, rejected, succeeded, and failed outcomes.

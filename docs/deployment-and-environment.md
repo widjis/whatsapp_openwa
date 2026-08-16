@@ -28,6 +28,12 @@ docker compose up -d --build
 
 Use this when you need one WhatsApp number and one gateway instance.
 
+Deployment helper alternative:
+
+```bash
+./scripts/docker-deploy.sh up
+```
+
 ### Multi-instance Docker
 Current reference file:
 - `docker-compose.multi.yml`
@@ -39,6 +45,50 @@ docker compose -f docker-compose.multi.yml up -d --build
 ```
 
 Use this when you need more than one WhatsApp number, or when you want to separate AI chat behavior from operational command behavior.
+
+Deployment helper alternative:
+
+```bash
+./scripts/docker-deploy.sh up --multi
+```
+
+## Docker Deployment Script
+File:
+- `scripts/docker-deploy.sh`
+
+Purpose:
+- wrap the common Docker Compose operations used by this repository
+- avoid retyping single-instance vs multi-instance compose commands
+- create the expected host data directories before startup
+
+Supported actions:
+- `up`
+- `down`
+- `restart`
+- `logs`
+- `ps`
+- `build`
+- `config`
+
+Common examples:
+
+```bash
+./scripts/docker-deploy.sh up
+./scripts/docker-deploy.sh up --multi
+./scripts/docker-deploy.sh ps --multi
+./scripts/docker-deploy.sh logs --multi --service whatsapp-openwa-8192
+./scripts/docker-deploy.sh restart --service whatsapp-openwa --no-build
+./scripts/docker-deploy.sh down --multi
+```
+
+Behavior notes:
+- defaults to `docker-compose.yml`
+- `--multi` switches to `docker-compose.multi.yml`
+- `up` and `restart` build by default unless `--no-build` is passed
+- `logs` follows the log stream by default unless `--no-follow` is passed
+- requires `.env` to exist in the project root
+- `.env` comments must use `#`, not `//`, because Docker Compose parses the file strictly
+- uses `docker compose` when available, with `docker-compose` as fallback
 
 ## Core Environment Variables
 
@@ -193,6 +243,14 @@ When code changes but behavior still looks stale:
 docker compose down
 docker compose build --no-cache
 docker compose up -d
+```
+
+Equivalent helper-script flow:
+
+```bash
+./scripts/docker-deploy.sh down
+./scripts/docker-deploy.sh build
+./scripts/docker-deploy.sh up --no-build
 ```
 
 This is especially important when:

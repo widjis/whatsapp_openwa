@@ -42,6 +42,11 @@ Reproduce the reference behavior, but do not copy transport-specific debt into t
 - Multi instance (separate data dirs):
   - `docker compose -f docker-compose.multi.yml up --build`
   - Exposes `8192` and `8193`
+- Deployment helper script:
+  - `./scripts/docker-deploy.sh up`
+  - `./scripts/docker-deploy.sh up --multi`
+  - `./scripts/docker-deploy.sh logs --multi --service whatsapp-openwa-8192`
+  - `./scripts/docker-deploy.sh restart --no-build`
 
 ## Runtime Logs
 - Default log directory: `DATA_DIR/logs`
