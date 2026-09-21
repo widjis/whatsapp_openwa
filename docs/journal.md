@@ -759,3 +759,10 @@
 - Caption now uses “A kind reminder, Pak …, terkait SRF terlampir …” and closes with “Mohon bantuannya untuk review dan approval. Terima kasih.”
 - Updated exact-caption and boundary assertions plus specification/deployment examples.
 - 12 helpdesk tests and TypeScript build passed; OpenAPI reviewed with no contract change. Not deployed.
+
+## [2026-09-22] Remove escape ambiguity from SRF target validation
+- User-provided container function and runtime failure show overescaped regex rejecting valid approver numbers. Local source previously accepted the same numbers; deployed code differs.
+- Replaced escaped plus/dots with `[+]` and `[.]` in phone/group patterns so deployment copies do not need those escapes.
+- Added the exact reported four-number list, legacy JID normalization, and malformed group suffix to regression assertions.
+- Helpdesk suite and TypeScript build passed; compiled validator accepts the reported configuration locally. Container requires updated source plus image rebuild; env-only restart is insufficient.
+- OpenAPI reviewed; accepted formats and external contract unchanged. No deployment performed.

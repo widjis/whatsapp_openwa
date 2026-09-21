@@ -117,6 +117,13 @@ test('SRF delivery is one document with caption; failed sends remain retryable',
     assert.deepEqual(targets.mentions,['628111111111@c.us','628222222222@c.us']);
     const text = await buildSrfApprovalMessage({ticketId:'7089',requesterLabel:'Test Requester',subject:'Permintaan router Wi-Fi',description:'',attachmentName:'SRF.pdf'});
     assert.equal(buildSrfDocumentCaption(text,targets.mentions), 'A kind reminder, Pak @628111111111, @628222222222, terkait SRF terlampir "SRF.pdf", dengan Ticket ID 7089 dari Test Requester, mengenai Permintaan router Wi-Fi. Mohon bantuannya untuk review dan approval. Terima kasih.');
+    process.env.SRF_APPROVER_PHONES = '6282323336511,6285712612218,6285255150721,6281132041331';
+    assert.deepEqual(getSrfApprovalTargets().mentions, ['6282323336511@c.us','6285712612218@c.us','6285255150721@c.us','6281132041331@c.us']);
+    process.env.SRF_APPROVER_PHONES = '6282323336511@s.whatsapp.net';
+    assert.deepEqual(getSrfApprovalTargets().mentions, ['6282323336511@c.us']);
+    process.env.SRF_APPROVAL_GROUP_ID = '123456@gXus';
+    assert.throws(getSrfApprovalTargets,/group JID/);
+    process.env.SRF_APPROVAL_GROUP_ID = '123456@g.us';
     process.env.SRF_APPROVER_PHONES = 'not-a-number';
     assert.throws(getSrfApprovalTargets,/Invalid SRF/);
   } finally {

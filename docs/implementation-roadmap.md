@@ -60,6 +60,11 @@
 - Verification: 12 helpdesk tests, TypeScript build and diff check passed. Mentions, file routing and 1024-character limit retained.
 - OpenAPI reviewed: wording-only change, no request/response or integration contract change. No deployment performed; active phase unchanged.
 
+## SRF deployed validator correction — 2026-09-22
+- [x] Replace escape-dependent regex tokens and test the exact production approver list plus group/legacy JID cases.
+- Verification: 12 helpdesk tests and TypeScript build passed; compiled validator accepts the reported list locally. User's deployed function has extra escapes, requiring source sync and image rebuild.
+- OpenAPI reviewed; no contract change. Production acceptance pending; no phase closed.
+
 ## Progress Snapshot
 - Phase 2 scaffolding already exists in the root runtime:
   - `OpenwaClient`

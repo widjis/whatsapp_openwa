@@ -513,13 +513,13 @@ export function getSrfApprovalTargets(): { mentions: string[]; chatId: string } 
   const configured = parsePhonesEnv('SRF_APPROVER_PHONES')
   const phones = configured.length ? configured : REFERENCE_SRF_APPROVERS
   const mentions = [...new Set(phones.map((value) => {
-    if (!/^\+?[0-9 ()-]+(?:@c\.us|@s\.whatsapp\.net)?$/.test(value)) throw new Error('Invalid SRF_APPROVER_PHONES entry')
+    if (!/^[+]?[0-9 ()-]+(?:@c[.]us|@s[.]whatsapp[.]net)?$/.test(value)) throw new Error('Invalid SRF_APPROVER_PHONES entry')
     const phone = normalizePhoneDigits(value.split('@')[0])
     if (phone.length < 8 || phone.length > 15) throw new Error('Invalid SRF approver phone length')
     return `${phone}@c.us`
   }))]
   const chatId = process.env.SRF_APPROVAL_GROUP_ID?.trim() || REFERENCE_SRF_GROUP
-  if (!/^[0-9-]+@g\.us$/.test(chatId)) throw new Error('SRF_APPROVAL_GROUP_ID must be a group JID')
+  if (!/^[0-9-]+@g[.]us$/.test(chatId)) throw new Error('SRF_APPROVAL_GROUP_ID must be a group JID')
   return { mentions, chatId }
 }
 
