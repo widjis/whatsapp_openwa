@@ -5,3 +5,8 @@ export async function extractPdfFirstPageText(buffer: Buffer): Promise<string> {
   return (parsed.text ?? '').trim()
 }
 
+
+export async function extractPdfText(buffer: Buffer): Promise<string> {
+  const parsed = await pdfParse(buffer)
+  return (parsed.text ?? '').trim()
+}

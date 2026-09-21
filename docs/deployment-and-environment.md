@@ -1,285 +1,112 @@
 # Deployment and Environment
 
-## Purpose
-This document explains how this project is configured and deployed across local development, single-instance Docker, and multi-instance Docker.
+## Scope
 
-## Runtime Modes
+`whatsapp_openwa` is the production-target application gateway. `whatsapp_api_n8nv2` is the behavioral reference. OpenWA server and Redis are external services; this Compose stack does not install or upgrade them.
 
-### Local development
-Typical command:
+## Requirements
+
+- Docker daemon and Docker Compose (`docker compose`, or legacy `docker-compose`).
+- Bash on the deployment host (Linux/macOS, or WSL with Docker integration).
+- Current source checkout, including `tests/`, `package-lock.json` and `Dockerfile`.
+- Deployment-specific `.env` in the repository root; do not shell-source it. Comments use `#`.
+- OpenWA connection: `OPENWA_BASE_URL`, `OPENWA_API_KEY`, and `OPENWA_SESSION_ID` or `OPENWA_SESSION_NAME`.
+- ServiceDesk, technician contacts, allowed IPs, reaction groups and SRF approver numbers configured for the target environment.
+- `REDIS_HOST` and `REDIS_PORT` for restart-persistent claim and SRF state. Container `localhost` means that container, not another host/service.
+
+## Deploy
+
+Run on the machine whose Docker daemon will host the application:
 
 ```bash
-npm install
-npm run dev
+./scripts/docker-deploy.sh check
+./scripts/docker-deploy.sh deploy
 ```
 
-Common local overrides:
-- `PORT=8194`
-- `DATA_DIR=data-local`
+The script resolves paths from its own location, so it can also be invoked by absolute path from another directory. The root `.env` is explicitly used for Compose interpolation. Existing shell environment overrides still follow Compose rules.
 
-This is useful when port `8192` is already in use or when local auth data should be isolated from server data.
+Sequence:
+1. Validate Compose quietly and validate the selected service.
+2. Verify Docker daemon availability.
+3. Build the image: dependency installation, isolated helpdesk regression tests, TypeScript compilation, production dependency pruning.
+4. Only after build success, recreate the selected containers using the built image.
+5. Wait up to 120 seconds for Docker health status to become healthy; return nonzero on timeout or stopped/missing-healthcheck container.
 
-### Single-instance Docker
-Typical command:
+There is no preliminary `down`, volume deletion, image prune or automatic rollback. A build failure leaves running containers untouched. A startup/health failure leaves containers available for diagnosis; the previous container may already have been replaced. Use `logs` and `ps` to investigate.
 
-```bash
-docker compose up -d --build
-```
+Health checks call `/health` inside each container using its configured `PORT`. This confirms application HTTP responsiveness only, not OpenWA authentication, Redis connectivity, ServiceDesk updates or WhatsApp delivery. Complete the operator acceptance checklist after deployment.
 
-Use this when you need one WhatsApp number and one gateway instance.
-
-Deployment helper alternative:
+## Commands
 
 ```bash
-./scripts/docker-deploy.sh up
-```
-
-### Multi-instance Docker
-Current reference file:
-- `docker-compose.multi.yml`
-
-Typical command:
-
-```bash
-docker compose -f docker-compose.multi.yml up -d --build
-```
-
-Use this when you need more than one WhatsApp number, or when you want to separate AI chat behavior from operational command behavior.
-
-Deployment helper alternative:
-
-```bash
-./scripts/docker-deploy.sh up --multi
-```
-
-## Docker Deployment Script
-File:
-- `scripts/docker-deploy.sh`
-
-Purpose:
-- wrap the common Docker Compose operations used by this repository
-- avoid retyping single-instance vs multi-instance compose commands
-- create the expected host data directories before startup
-
-Supported actions:
-- `up`
-- `down`
-- `restart`
-- `logs`
-- `ps`
-- `build`
-- `config`
-
-Common examples:
-
-```bash
-./scripts/docker-deploy.sh up
-./scripts/docker-deploy.sh up --multi
-./scripts/docker-deploy.sh ps --multi
-./scripts/docker-deploy.sh logs --multi --service whatsapp-openwa-8192
-./scripts/docker-deploy.sh restart --service whatsapp-openwa --no-build
-./scripts/docker-deploy.sh down --multi
-```
-
-Behavior notes:
-- defaults to `docker-compose.yml`
-- `--multi` switches to `docker-compose.multi.yml`
-- `up` and `restart` build by default unless `--no-build` is passed
-- `logs` follows the log stream by default unless `--no-follow` is passed
-- requires `.env` to exist in the project root
-- `.env` comments must use `#`, not `//`, because Docker Compose parses the file strictly
-- uses `docker compose` when available, with `docker-compose` as fallback
-
-## Core Environment Variables
-
-### Base runtime
-- `PORT`: HTTP port for the running instance
-- `DATA_DIR`: writable runtime directory for auth, uploads, store, and related files
-- `ALLOWED_IPS`: HTTP allowlist for incoming requests
-
-### WhatsApp behavior
-- `WA_VERSION`: optional explicit WhatsApp version override
-- `WA_MAX_RECONNECT_ATTEMPTS`: cap reconnect loops
-- `WA_PAIRING_PHONE`: optional pairing-code login phone number
-
-Note:
-- QR login still relies on normal `connection.update` QR events
-- pairing code is optional and should not be enabled unless intentionally used
-
-### N8N / chatbot behavior
-- `N8N_ENABLED`
-- `N8N_WEBHOOK_URL`
-- `N8N_TIMEOUT`
-- `REPLY_GATEWAY_ENABLED`
-- `REPLY_GATEWAY_AI_ENABLED`
-- `REPLY_GATEWAY_MODEL`
-
-### OpenAI / AI behavior
-- `OPENAI_API_KEY`
-- `SERVICE_CATEGORY_AI_ENABLED`
-- `DISPATCHER_AI_ROUTING_ENABLED`
-- `DISPATCHER_AI_MODEL`
-
-### Dispatcher behavior
-- `DISPATCHER_ENABLED`
-- `DISPATCHER_GATEWAY_BASE_URL`
-- `DISPATCHER_DRY_RUN`
-- `DISPATCHER_RUN_ONCE`
-- `DISPATCHER_SCAN_INTERVAL_SECONDS`
-
-Dispatcher-specific detail is documented further in `docs/dispatcher_setup.md`.
-
-### SharePoint / leave schedule behavior
-- `LEAVE_SCHEDULE_SHARE_URL`
-- `LEAVE_SCHEDULE_AUTO_DOWNLOAD_ENABLED`
-- `LEAVE_SCHEDULE_AUTO_DOWNLOAD_TZ_OFFSET_HOURS`
-- `LEAVE_SCHEDULE_AUTO_DOWNLOAD_HOUR`
-- `LEAVE_SCHEDULE_AUTO_DOWNLOAD_MINUTE`
-- `MS_TENANT_ID`
-- `MS_CLIENT_ID`
-- `MS_GRAPH_SCOPES`
-- `SHAREPOINT_TOKEN_CACHE_PATH`
-- `DISPATCHER_LEAVE_SCHEDULE_XLSX_PATH`
-- `LEAVE_SCHEDULE_AUTO_DOWNLOAD_RUN_ON_STARTUP`
-
-## Data Directory Contract
-If `DATA_DIR` is unset, the app falls back to the project root for some runtime files.
-
-Recommended practice:
-- always set `DATA_DIR` explicitly in production
-- keep `DATA_DIR` unique per instance
-
-Important files inside `DATA_DIR`:
-- `auth_info_baileys/`
-- `baileys_store.json`
-- `uploads/`
-- `sharepoint_token_cache.json` or custom token path
-- leave schedule XLSX
-- `technicianContacts.json`
-
-## Docker Multi-Instance Pattern
-Current pattern in `docker-compose.multi.yml`:
-- `whatsapp-api-8192` uses `./data-8192:/app/data`
-- `whatsapp-api-8193` uses `./data-8193:/app/data`
-
-This pattern should be preserved for every additional instance:
-
-1. unique service name
-2. unique `PORT`
-3. unique host volume
-4. unique WhatsApp number
-
-Example checklist for adding a new instance:
-- duplicate a service block
-- set `PORT: 8194`
-- map `"8194:8194"`
-- mount `./data-8194:/app/data`
-- adjust feature toggles for the intended role
-
-## Recommended Role-Based Configuration
-
-### AI chatbot instance
-Recommended settings:
-- `N8N_ENABLED=true`
-- `REPLY_GATEWAY_ENABLED=true`
-- `REPLY_GATEWAY_AI_ENABLED=true`
-- `DISPATCHER_ENABLED=false`
-
-Optional:
-- set `OPENAI_API_KEY` if AI-based reply decisioning is needed
-
-### Operations / command instance
-Recommended settings:
-- `DISPATCHER_ENABLED=true` only if the dispatcher should run in this instance
-- `N8N_ENABLED=false`
-- `REPLY_GATEWAY_ENABLED=false`
-- `REPLY_GATEWAY_AI_ENABLED=false`
-- `SERVICE_CATEGORY_AI_ENABLED=false` unless intentionally needed
-
-This keeps the operational bot deterministic and reduces surprise auto-replies.
-
-## Environment Override Rules
-In Docker Compose, `env_file: .env` loads the shared baseline for all services.
-
-Per-service `environment:` entries then override or extend that baseline.
-
-That means:
-- shared values belong in `.env`
-- instance-specific behavior belongs in each service block
-
-Examples of instance-specific values:
-- `PORT`
-- `DATA_DIR`
-- `DISPATCHER_GATEWAY_BASE_URL`
-- `WA_PAIRING_PHONE`
-- AI toggles
-
-## Secrets Handling
-Current repository pattern:
-- `.env` is used as the baseline source
-- secrets are injected into containers at runtime
-
-Recommendations:
-- do not commit plaintext secrets
-- use a deployment-specific `.env` outside normal version control where possible
-- rotate credentials when troubleshooting access issues that involved copying env values around
-
-## Build and Rebuild Guidance
-
-### Local Node
-When dependencies change:
-
-```bash
-npm install
-```
-
-The repository uses:
-- `postinstall` to patch Baileys for QR support on current protocol behavior
-
-### Docker
-When code changes but behavior still looks stale:
-
-```bash
-docker compose down
-docker compose build --no-cache
-docker compose up -d
-```
-
-Equivalent helper-script flow:
-
-```bash
-./scripts/docker-deploy.sh down
+./scripts/docker-deploy.sh deploy --no-cache
+./scripts/docker-deploy.sh deploy --timeout 180
 ./scripts/docker-deploy.sh build
-./scripts/docker-deploy.sh up --no-build
+./scripts/docker-deploy.sh health
+./scripts/docker-deploy.sh ps
+./scripts/docker-deploy.sh logs --no-follow
+./scripts/docker-deploy.sh restart --no-build
+./scripts/docker-deploy.sh down
 ```
 
-This is especially important when:
-- dependency patches changed
-- authentication flow changed
-- the running image seems older than the local source
+- Default action, `deploy`, and `up` build, recreate and wait for health.
+- `restart` also builds by default. `--no-build` recreates with the existing image (and reloads environment); it does not include new source changes or rerun image-build tests.
+- Existing images without the new healthcheck must be rebuilt before `--no-build` can pass.
+- `check`/`config` validate without printing resolved environment values and do not require a running daemon.
+- `logs` follows by default; `--no-follow` prints the last 200 lines and exits. Application logs can contain operational data.
+- `down` affects the selected Compose project and rejects `--service`; bind-mounted data remains.
+- `help` works without Docker or `.env`.
 
-## Validation Checklist After Deploy
-After any deploy, confirm:
+## Single instance
 
-1. container starts and binds the expected port
-2. `DATA_DIR` is writable
-3. `auth_info_baileys` is created under the expected volume
-4. the web UI loads
-5. WhatsApp status messages are visible in logs or UI
-6. the dispatcher only runs on the intended instance
+`docker-compose.yml` runs `whatsapp-openwa` on host/container port 8192. `PORT: 8192` is explicit so `.env` cannot accidentally break the fixed port mapping. Data is mounted from `./data` to `/app/data`.
 
-## Common Misconfigurations
-- same WhatsApp number used by two active instances
-- same host volume reused by two services
-- `DISPATCHER_GATEWAY_BASE_URL` left pointing to another port
-- leaving AI toggles enabled on a command-only bot
-- assuming `SHAREPOINT_TOKEN_CACHE_PATH` also controls the leave schedule XLSX path
+## Multiple instances
 
-## Recommended Deployment Defaults
-For production-like setups:
-- set explicit `DATA_DIR`
-- isolate one volume per service
-- set explicit `PORT`
-- keep dispatcher disabled on chatbot-only instances
-- keep AI disabled on operations-only instances unless intentionally required
-- prefer one source of truth for baseline env, then override per service
+```bash
+./scripts/docker-deploy.sh check --multi
+./scripts/docker-deploy.sh deploy --multi --service whatsapp-openwa-8192
+./scripts/docker-deploy.sh deploy --multi --service whatsapp-openwa-8193
+./scripts/docker-deploy.sh logs --multi --service whatsapp-openwa-8192 --no-follow
+```
+
+Use `--multi` consistently for later status/log/health/down commands. Omitting `--service` selects both services.
+
+- `whatsapp-openwa-8192`: port 8192, data `./data-8192`.
+- `whatsapp-openwa-8193`: port 8193, data `./data-8193`; dispatcher and N8N disabled and OpenAI key cleared by the current Compose overrides.
+- Both services inherit `.env`. Before running both, configure their intended `OPENWA_SESSION_ID`/`OPENWA_SESSION_NAME` and webhook destinations in the per-service environment. Separate data directories do not automatically select separate WhatsApp sessions.
+- Per-service values override `env_file` values. Single and multi modes both expose 8192; do not run them simultaneously on the same host port.
+
+## Persistent data and secrets
+
+Preserve technician contacts, SharePoint token cache, leave workbooks, uploads, logs and webhook captures under each instance's data directory. Claim/SRF state needs external Redis to survive restart. WhatsApp authentication is owned by the OpenWA server; deleting local gateway data does not repair an OpenWA session.
+
+`.env`, `data/`, `data-*`, uploads, logs and the reference tree are excluded from the Docker build context. Source tests are included in the build stage and are not copied into the runtime stage. Never include plaintext credentials in deployment commands or version control.
+
+## Local verification
+
+```bash
+bash -n scripts/docker-deploy.sh
+python3 tests/test_docker_deploy.py
+npm run test:helpdesk
+npm run build
+```
+
+Deployment tests use a fake Docker CLI and temporary directories; they do not start services. Real image build and container health checks require an available Docker daemon.
+
+## SRF approval recipients and caption
+
+Copy the values in [srf-approval.env.example](srf-approval.env.example) into the deployment host's `.env`:
+
+```env
+SRF_APPROVER_PHONES=6282323336511,6285712612218,6289524548777,6281132041331
+SRF_APPROVAL_GROUP_ID=120363162455880145@g.us
+```
+
+These are the production defaults from `whatsapp_api_n8nv2`. Missing/blank values use those defaults. To change recipients, provide a comma-separated list; numbers normalize to international format and duplicates are removed. Invalid phone entries/group JIDs prevent SRF sending with an attachment error.
+
+The SRF PDF goes to the configured approval group; the main notification and other attachments continue to use the webhook receiver. Changing targets does not automatically resend already recorded SRF attachments. Verify with a new test ticket/attachment, not by clearing production dedupe data.
+
+Caption uses the fixed format `A kind reminder, Pak @number1, @number2, terkait SRF terlampir "[filename]", dengan Ticket ID [id] dari [requester], mengenai [summary]. Mohon bantuannya untuk review dan approval. Terima kasih.` AI only generates the short summary; fallback uses the ticket subject. Full PDF text is extracted for summary input, bounded to 12000 characters; detection still uses first-page evidence. No OCR is introduced.
+
+Run `./scripts/docker-deploy.sh deploy` to install this code and configuration. `restart --no-build` only reloads configuration on an already updated image.

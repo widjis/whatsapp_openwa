@@ -400,8 +400,15 @@ The next documents that should be added after this one are:
 
 - Use `whatsapp_api_n8nv2` attachment-scoped classification: PDF filename or first-page extracted text must match `service request form`, whole-word `SRF`, `service request`, or `request` (case-insensitive). The broad `request` keyword is retained for reference parity; this is classification, not approval validation.
 - Ticket category, subject or description alone does not classify each attached PDF as SRF.
-- `SRF_DETECTION_AI_ENABLED` and `SRF_DETECTION_AI_MODEL` no longer control classification. AI may still compose the approval text with a deterministic fallback.
+- `SRF_DETECTION_AI_ENABLED` and `SRF_DETECTION_AI_MODEL` no longer control classification. AI may summarize the request only; the application fixes the approval caption layout and uses the subject as fallback.
 - Send SRF PDF and approval caption in one provider request. Keep configured `SRF_APPROVER_PHONES` mention tokens in the caption and mentions metadata, within 1024 characters.
 - Record the attachment URL only after successful document send. Failed sends remain eligible for retry. Existing URL-level state and sequential duplicate suppression remain; concurrent delivery and ambiguous network outcomes are not guaranteed exactly-once.
 - Preserve production forwarding of regular PDFs/images/other documents and regular attachment forwarding on updated-ticket events. These forwarding behaviors exceed the older reference's analysis/skip behavior.
 - First-page text parsing has no OCR; scanned PDFs without usable filename evidence may not classify as SRF.
+
+### SRF reference parity — 2026-09-22
+- Default approvers and destination group match n8n v2; override through `SRF_APPROVER_PHONES` and `SRF_APPROVAL_GROUP_ID` (see deployment guide).
+- Preserve original document bytes and filename. Always put every configured mention in caption and metadata.
+- Caption starts with `A kind reminder, Pak @number, ...` and ends with `Mohon bantuannya untuk review dan approval. Terima kasih.` within 1024 characters; dynamic fields are bounded.
+- Summary can use extracted full PDF text (up to 12000 characters supplied to AI); failed extraction or AI uses first-page/ticket-subject fallback. No OCR.
+- Main notification stays at webhook receiver; only recognized SRF approval documents go to the dedicated approval group.

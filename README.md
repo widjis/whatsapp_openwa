@@ -1,10 +1,10 @@
 # WhatsApp OpenWA Rebuild
 
-This repository is a fresh OpenWA-based rebuild of the behavior captured in `reference/`.
+This repository is the production-target OpenWA gateway. `whatsapp_api_n8nv2` is the primary behavioral reference; `reference/` is a supplementary frozen snapshot.
 
 ## Direction
 - `reference/` is read-only and acts as a behavioral baseline
-- the active implementation will be created in the repository root
+- the active implementation lives under `src/`
 - the new codebase is OpenWA-only
 - Baileys is not part of the new runtime plan
 
@@ -29,7 +29,7 @@ At the moment, the repository is in the bootstrap and validation stage for the O
 ## Repository Structure
 - `docs/` — source-of-truth planning, architecture, contracts, workflows, and roadmap
 - `reference/` — frozen reference implementation used to reproduce behavior
-- `src/` — new implementation target location once coding begins
+- `src/` — active OpenWA application implementation
 
 ## Working Rule
 Reproduce the reference behavior, but do not copy transport-specific debt into the new codebase.
@@ -43,10 +43,13 @@ Reproduce the reference behavior, but do not copy transport-specific debt into t
   - `docker compose -f docker-compose.multi.yml up --build`
   - Exposes `8192` and `8193`
 - Deployment helper script:
-  - `./scripts/docker-deploy.sh up`
+  - `./scripts/docker-deploy.sh check`
+  - `./scripts/docker-deploy.sh deploy`
   - `./scripts/docker-deploy.sh up --multi`
   - `./scripts/docker-deploy.sh logs --multi --service whatsapp-openwa-8192`
   - `./scripts/docker-deploy.sh restart --no-build`
+
+The deploy script builds and runs helpdesk tests before replacing containers, then waits for application health. It preserves data directories. See [deployment instructions](docs/deployment-and-environment.md) and the [operator test checklist](docs/operational-runbook.md). OpenWA/Redis/ServiceDesk readiness is verified separately.
 
 ## Runtime Logs
 - Default log directory: `DATA_DIR/logs`

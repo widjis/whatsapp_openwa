@@ -12,3 +12,7 @@ docs
 .git
 .DS_Store
 
+
+# Keep per-instance runtime data and credentials out of the build context
+data-*
+*.log

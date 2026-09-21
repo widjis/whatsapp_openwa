@@ -741,3 +741,21 @@
 - Replaced ticket-context/AI classification with the reference attachment-name/first-page keyword rules; AI remains optional for approval wording.
 - SRF PDF now carries the approval caption and mentions in one send, bounded to 1024 characters. Successful-send state is saved afterwards.
 - Added `npm run test:helpdesk` covering claim and SRF regressions; 11 tests, typecheck/build and whitespace validation passed. Real production delivery remains pending.
+
+## [2026-09-22] Harden Docker deployment helper
+- Extended existing script with deploy/check/health, strict options, service validation, explicit Compose paths, build-before-recreate and bounded container health verification.
+- Dockerfile runs helpdesk regression tests before producing the runtime image and adds an internal `/health` check. Single compose pins PORT=8192; build context excludes data-*.
+- Updated README, deployment guide and operator runbook; removed obsolete Baileys operational steps from these OpenWA deployment instructions.
+- Bash syntax, 9 fake-Docker tests, real single/multi Compose validation, 11 helpdesk tests, TypeScript build and diff check passed.
+- Docker daemon unavailable: image build and actual deployment not performed. OpenAPI reviewed; no backend contract changes.
+
+## [2026-09-22] Align SRF recipients, group and caption with n8n v2
+- User confirmed PDF/ticketing fixes; requested old-style multi-mention caption.
+- Configurable reference production defaults for four approvers and dedicated group, fixed caption format, summary-only AI, full-text extraction bounded for summary input, original bytes preserved.
+- Added deployment env example and missing local settings without overwriting existing values.
+- 12 helpdesk tests and build passed; no external sends/deployment. Updated OpenAPI, workflows, specification and roadmap.
+
+## [2026-09-22] Apply approved reminder wording to SRF caption
+- Caption now uses “A kind reminder, Pak …, terkait SRF terlampir …” and closes with “Mohon bantuannya untuk review dan approval. Terima kasih.”
+- Updated exact-caption and boundary assertions plus specification/deployment examples.
+- 12 helpdesk tests and TypeScript build passed; OpenAPI reviewed with no contract change. Not deployed.

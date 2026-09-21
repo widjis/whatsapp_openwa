@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import axios from 'axios';
 import { MessagingService } from '../src/features/channel/messagingService.ts';
-import { handleAndSendAttachments, isSrfPdfAttachmentHeuristic, buildSrfDocumentCaption } from '../src/features/http/routes/messages.ts';
+import { handleAndSendAttachments, isSrfPdfAttachmentHeuristic, buildSrfDocumentCaption, getSrfApprovalTargets, buildSrfApprovalMessage } from '../src/features/http/routes/messages.ts';
 import { loadPreviousTicketState } from '../src/features/tickets/ticketStateStore.ts';
 import { extractPdfFirstPageText } from '../src/utils/pdf.ts';
 
@@ -44,7 +44,8 @@ test('SRF detection uses attachment evidence rather than ticket context', () => 
 
 test('caption retains mentions and respects provider length', () => {
   const caption = buildSrfDocumentCaption('Long explanation '.repeat(200),['628111@c.us','628222@c.us']);
-  assert.ok(caption.startsWith('@628111 @628222\n'));
+  assert.ok(caption.startsWith('A kind reminder, Pak @628111, @628222, '));
+  assert.ok(caption.endsWith('Mohon bantuannya untuk review dan approval. Terima kasih.'));
   assert.equal(caption.length,1024);
 });
 
@@ -54,7 +55,8 @@ test('SRF delivery is one document with caption; failed sends remain retryable',
   delete process.env.REDIS_HOST; delete process.env.REDIS_PORT; delete process.env.OPENAI_API_KEY;
   process.env.SD_BASE_URL = 'https://servicedesk.invalid/api/v3';
   process.env.SERVICE_DESK_TOKEN = 'test-only';
-  process.env.SRF_APPROVER_PHONES = '628111';
+  process.env.SRF_APPROVER_PHONES = '628111111111,628222222222';
+  process.env.SRF_APPROVAL_GROUP_ID = '123456@g.us';
   const document = pdf('Service Request Form');
   const calls = [];
   let fail = true;
@@ -79,7 +81,10 @@ test('SRF delivery is one document with caption; failed sends remain retryable',
     await handleAndSendAttachments(args);
     assert.deepEqual(calls.map(c=>c.kind),['document']);
     assert.match(calls[0].input.caption,/@628111/);
-    assert.deepEqual(calls[0].input.mentions,['628111@c.us']);
+    assert.deepEqual(calls[0].input.mentions,['628111111111@c.us','628222222222@c.us']);
+    assert.equal(calls[0].input.chatId,'123456@g.us');
+    assert.match(calls[0].input.caption,/^A kind reminder, Pak @628111111111, @628222222222, terkait SRF terlampir/);
+    assert.deepEqual(calls[0].input.document,document);
     assert.deepEqual((await loadPreviousTicketState(request.id)).srfSentAttachmentUrls,['/attachment/test']);
     calls.length=0;
     await handleAndSendAttachments(args);
@@ -91,6 +96,30 @@ test('SRF delivery is one document with caption; failed sends remain retryable',
     assert.equal(calls[0].input.mentions,undefined);
   } finally {
     axios.defaults.adapter=previousAdapter;
+    for(const key of Object.keys(process.env)) if(!(key in env)) delete process.env[key];
+    Object.assign(process.env,env);
+  }
+});
+
+ test('reference defaults, overrides and deterministic caption', async () => {
+  const env = {...process.env};
+  try {
+    delete process.env.SRF_APPROVER_PHONES;
+    delete process.env.SRF_APPROVAL_GROUP_ID;
+    delete process.env.OPENAI_API_KEY;
+    assert.deepEqual(getSrfApprovalTargets(), {
+      mentions: ['6282323336511@c.us','6285712612218@c.us','6289524548777@c.us','6281132041331@c.us'],
+      chatId: '120363162455880145@g.us'
+    });
+    process.env.SRF_APPROVER_PHONES = '08111111111,+628111111111,628222222222@c.us';
+    process.env.SRF_APPROVAL_GROUP_ID = '123456@g.us';
+    const targets = getSrfApprovalTargets();
+    assert.deepEqual(targets.mentions,['628111111111@c.us','628222222222@c.us']);
+    const text = await buildSrfApprovalMessage({ticketId:'7089',requesterLabel:'Test Requester',subject:'Permintaan router Wi-Fi',description:'',attachmentName:'SRF.pdf'});
+    assert.equal(buildSrfDocumentCaption(text,targets.mentions), 'A kind reminder, Pak @628111111111, @628222222222, terkait SRF terlampir "SRF.pdf", dengan Ticket ID 7089 dari Test Requester, mengenai Permintaan router Wi-Fi. Mohon bantuannya untuk review dan approval. Terima kasih.');
+    process.env.SRF_APPROVER_PHONES = 'not-a-number';
+    assert.throws(getSrfApprovalTargets,/Invalid SRF/);
+  } finally {
     for(const key of Object.keys(process.env)) if(!(key in env)) delete process.env[key];
     Object.assign(process.env,env);
   }

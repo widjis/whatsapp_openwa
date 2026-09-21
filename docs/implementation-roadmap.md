@@ -35,6 +35,31 @@
 - Updated feature spec, parity checklist, OpenAPI, integration contract, journal and operator runbook.
 - Deployed provider version, Redis persistence, real PDF delivery and approver notifications remain to be tested; no migration phase closed and no deployment performed.
 
+## Docker deployment helper — 2026-09-22
+
+- [x] Upgrade the existing helper for build-before-recreate, scoped service selection, quiet validation and bounded health checks.
+- [x] Run helpdesk regression tests during image build; add an internal HTTP Docker healthcheck; align single-instance PORT with its fixed mapping.
+- [x] Exclude multi-instance runtime data from build context; update deployment and operator documentation for the actual OpenWA gateway.
+- Local verification: Bash syntax, 9 fake-Docker deployment tests, real Compose validation for single/multi, 11 helpdesk tests and TypeScript build passed; diff whitespace check passed.
+- Docker daemon is unavailable locally (Colima socket absent). Image build and real deployment/health acceptance are not verified; no deployment was performed.
+- Reviewed `docs/openapi.yaml`: no application route, payload, status-code or auth changes; no OpenAPI change required for this work.
+- Migration remains in Phase 1; this scoped operator-tooling work does not close a phase.
+
+## SRF caption/mention parity — 2026-09-22
+
+- [x] Match n8n v2 production approver/group defaults with configurable overrides.
+- [x] Fix caption layout, retain all mention tokens/metadata and original file bytes, use optional AI for summary only.
+- [x] Extract full PDF text for bounded summary input while retaining first-page classification.
+- [x] Verify reference defaults, phone normalization/dedupe, group override, multi-mention document send, caption bounds and fallback; 12 helpdesk tests and TypeScript build passed.
+- Added `.env` example and missing local SRF settings; existing values are not overwritten. Deployment-host settings and delivery of these new captions remain unverified.
+- User confirmed previous PDF and ticketing fixes work. This new routing/caption change is not yet deployed. OpenAPI and related docs updated; migration phase unchanged.
+
+## Approved SRF caption wording — 2026-09-22
+
+- [x] Apply the approved “A kind reminder, Pak …” wording to the fixed caption and update the exact-output regression assertion.
+- Verification: 12 helpdesk tests, TypeScript build and diff check passed. Mentions, file routing and 1024-character limit retained.
+- OpenAPI reviewed: wording-only change, no request/response or integration contract change. No deployment performed; active phase unchanged.
+
 ## Progress Snapshot
 - Phase 2 scaffolding already exists in the root runtime:
   - `OpenwaClient`
