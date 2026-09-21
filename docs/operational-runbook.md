@@ -243,3 +243,18 @@ That pattern usually points to:
 - server environment differences
 - egress IP reputation
 - protocol rejection outside normal file-based troubleshooting
+
+## Combined claim and attachment acceptance — 2026-09-22
+
+After deploying the reviewed build to the intended instance, use test tickets and an agreed test group. Verify Redis is configured for persistence checks. Offline regression command: `npm run test:helpdesk`.
+
+1. New ticket with a readable SRF PDF: main notification plus one PDF carrying approval caption; approver mentions work, document opens, no separate approval-only message and no HTTP 400.
+2. Same ticket with a neutral diagnostic PDF: it is forwarded as a regular attachment, even when ticket subject/category says SRF.
+3. PDF with neutral filename and Service Request Form text on page one: recognized as SRF.
+4. Image and another document: forwarding works. URL-image send also works without invalid-field rejection.
+5. Repeat the new-ticket event sequentially: the successful SRF attachment is not sent again. Main notification duplication is a separate existing behavior.
+6. In an isolated test environment, simulate document rejection then retry: no approval-only message on failure; success state remains unset until retry succeeds.
+7. On the main ticket notification, run claim A, change emoji A, competing claim B, removal B, removal A, immediate reclaim A. Only real ownership transitions produce confirmations; B cannot unclaim A.
+8. Restart after successful claim/SRF delivery with Redis enabled; repeat A's reaction and attachment event. Verify owner recognition and SRF duplicate suppression persist.
+
+Capture the running build/version, timestamp, ticket id, provider error details from server logs (without keys or document data), WhatsApp result and ServiceDesk assignment. Do not equate HTTP 200 from `/webhook` with successful delivery of every attachment.

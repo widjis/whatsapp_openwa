@@ -437,15 +437,6 @@ function isGroupChatId(chatId: string): boolean {
   return chatId.endsWith('@g.us')
 }
 
-function normalizeKeywordText(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/<[^>]*>/g, ' ')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
 function parsePhonesEnv(name: string): string[] {
   const raw = process.env[name]
   if (!raw) return []
@@ -504,75 +495,15 @@ function isAttachment(value: unknown): value is ServiceDeskAttachment {
   return typeof record.name === 'string' && typeof record.content_url === 'string' && typeof record.content_type === 'string'
 }
 
-function isSrfPdfAttachmentHeuristic(args: {
+export function isSrfPdfAttachmentHeuristic(args: {
   request: ServiceDeskRequest
   attachment: ServiceDeskAttachment
   pdfFirstPageText?: string
 }): boolean {
-  const contentType = args.attachment.content_type.toLowerCase()
-  if (!contentType.startsWith('application/pdf')) return false
-
-  const category = args.request.service_category?.name?.trim() ?? ''
-  if (category.startsWith('14.')) return true
-
-  const combined = normalizeKeywordText(
-    `${args.request.subject ?? ''}\n${args.request.description ?? ''}\n${args.attachment.name ?? ''}\n${category}\n${args.pdfFirstPageText ?? ''}`
-  )
-  const needles = ['srf', 'service request form', 'approval', 'it service request form', 'form']
-  return needles.some((needle) => combined.includes(normalizeKeywordText(needle)))
-}
-
-function parseBooleanEnv(name: string, fallback: boolean): boolean {
-  const raw = process.env[name]
-  if (!raw) return fallback
-  const normalized = raw.trim().toLowerCase()
-  if (['true', '1', 'yes', 'y'].includes(normalized)) return true
-  if (['false', '0', 'no', 'n'].includes(normalized)) return false
-  return fallback
-}
-
-async function isSrfPdfAttachment(args: {
-  request: ServiceDeskRequest
-  attachment: ServiceDeskAttachment
-  pdfFirstPageText?: string
-}): Promise<boolean> {
   if (!args.attachment.content_type.toLowerCase().startsWith('application/pdf')) return false
-
-  const apiKey = process.env.OPENAI_API_KEY?.trim()
-  const aiEnabled = parseBooleanEnv('SRF_DETECTION_AI_ENABLED', true)
-  const model = process.env.SRF_DETECTION_AI_MODEL?.trim() || 'gpt-4o-mini'
-  if (!apiKey || !aiEnabled) return isSrfPdfAttachmentHeuristic(args)
-
-  const subject = (args.request.subject ?? '').trim()
-  const description = stripHtmlToText(args.request.description ?? '')
-  const category = (args.request.service_category?.name ?? '').trim()
-  const attachmentName = (args.attachment.name ?? '').trim()
-
-  const prompt =
-    `Decide if this ticket attachment is an SRF (Service Request Form) that needs approval. ` +
-    `Answer with ONLY "SRF" or "NOT_SRF".\n\n` +
-    `Ticket subject: ${subject}\n` +
-    `Ticket description: ${truncateDescriptionFallback(description, 800)}\n` +
-    `Ticket category: ${category}\n` +
-    `Attachment filename: ${attachmentName}\n` +
-    `Attachment content-type: ${args.attachment.content_type}\n` +
-    `PDF first page text (if available): ${truncateDescriptionFallback(args.pdfFirstPageText ?? '', 1200)}\n`
-
-  try {
-    const client = new OpenAI({ apiKey })
-    const response = await client.chat.completions.create({
-      model,
-      messages: [{ role: 'user', content: prompt }],
-      max_tokens: 5,
-      temperature: 0,
-    })
-    const content = (response.choices[0]?.message?.content ?? '').trim().toUpperCase()
-    if (content === 'SRF') return true
-    if (content === 'NOT_SRF') return false
-    return isSrfPdfAttachmentHeuristic(args)
-  } catch {
-    return isSrfPdfAttachmentHeuristic(args)
-  }
+  // Match the n8n v2 attachment-scoped detector: ticket context is not evidence.
+  const evidence = `${args.attachment.name}\n${args.pdfFirstPageText ?? ''}`
+  return [/service request form/i, /\bsrf\b/i, /service request/i, /request/i].some((pattern) => pattern.test(evidence))
 }
 
 async function buildSrfApprovalMessage(args: {
@@ -659,7 +590,18 @@ async function analyzeImageAttachment(args: {
   }
 }
 
-async function handleAndSendAttachments(args: {
+export function buildSrfDocumentCaption(text: string, mentions: string[]): string {
+  const prefix = mentions.map((jid) => `@${jid.split('@')[0]}`).join(' ')
+  // Provider captions are limited to 1024 characters. Keep approver tokens outside
+  // generated prose so the model cannot omit the actual WhatsApp mentions.
+  const body = mentions.reduce((value, jid) => value.replaceAll(`@${jid.split('@')[0]}`, ''), text).trim()
+  const header = prefix ? `${prefix}\n` : ''
+  const available = 1024 - header.length
+  if (available < 1) throw new Error('SRF approver mentions exceed document caption limit')
+  return header + (body.length > available ? body.slice(0, Math.max(0, available - 1)) + '…' : body)
+}
+
+export async function handleAndSendAttachments(args: {
   request: ServiceDeskRequest
   receiverJid: string
   messaging: MessagingService
@@ -724,7 +666,7 @@ async function handleAndSendAttachments(args: {
           analysisLines.push(`- ${name}: PDF text extraction failed (${message})`)
         }
 
-        const isSrf = await isSrfPdfAttachment({ request: args.request, attachment, pdfFirstPageText })
+        const isSrf = isSrfPdfAttachmentHeuristic({ request: args.request, attachment, pdfFirstPageText })
         if (!isSrf) {
           await args.messaging.sendDocument({
             chatId: args.receiverJid,
@@ -745,17 +687,12 @@ async function handleAndSendAttachments(args: {
           mentions: approverMentions,
           pdfFirstPageText,
         })
-        await args.messaging.sendText({
-          chatId: args.receiverJid,
-          text: approvalText,
-          mentions: approverMentions,
-        })
         await args.messaging.sendDocument({
           chatId: args.receiverJid,
           document: buffer,
           mimetype: contentType || 'application/pdf',
           fileName: name,
-          caption: `SRF: ${name}`,
+          caption: buildSrfDocumentCaption(approvalText, approverMentions),
           mentions: approverMentions,
         })
 

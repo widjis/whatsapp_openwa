@@ -725,3 +725,19 @@
   - Aligned the fallback download target with the active dispatcher workbook path: `data/leave/leave-schedule.xlsx`.
   - Updated `docs/deployment-and-environment.md` and `docs/dispatcher_setup.md` so the new env contract is documented (`LEAVE_SCHEDULE_AUTO_DOWNLOAD_ENABLED`, schedule hour/minute, tz offset, token cache, and startup download toggle).
   - Verified with `npm run lint` and `npm run build`.
+
+## [2026-09-22] Make repeated owner claims silent
+- Reference is `whatsapp_api_n8nv2`; all runtime changes are in production-target `whatsapp_openwa`.
+- Same-owner repeats no longer emit Already Claimed in either claim result path. Competing owners retain the existing response.
+- Dedupe now tracks latest reaction state per session/chat/message/resolved actor; add-remove-add works within the debounce window.
+- Reaction LID digits no longer masquerade as a phone; unresolved identities are ignored.
+- Regression suite covers first claim, owner replay beyond TTL, changed emoji, competing owner, both race outcomes, immediate reclaim, unauthorized unclaim, LID resolution and group gating.
+- Offline regression tests, typecheck, build and diff whitespace check passed. Redis/live-service acceptance and deployment remain pending.
+- Updated feature/workflow docs, roadmap and OpenAPI behavioral description. No HTTP schema change and no changes to the reference repository.
+
+## [2026-09-22] Correct media payload and restore attachment-scoped SRF delivery
+- Compared directly with n8n v2. Removed provider-only invalid aliases `fileName` and `imageUrl`.
+- Local OpenWA 0.8.7 DTO validation reproduced `fileName` rejection and accepted corrected media fields.
+- Replaced ticket-context/AI classification with the reference attachment-name/first-page keyword rules; AI remains optional for approval wording.
+- SRF PDF now carries the approval caption and mentions in one send, bounded to 1024 characters. Successful-send state is saved afterwards.
+- Added `npm run test:helpdesk` covering claim and SRF regressions; 11 tests, typecheck/build and whitespace validation passed. Real production delivery remains pending.

@@ -499,3 +499,20 @@ All business workflows should depend on:
 - normalized identity values
 
 That rule is what keeps the migration from becoming another tightly coupled transport implementation.
+
+## Media payload correction — 2026-09-22
+
+Verified against local server source `/Users/widjis/Documents/Projects/OpenWA` (package version 0.8.7): `src/modules/message/dto/send-message.dto.ts` and strict whitelist validation in `src/main.ts`.
+- Document wire fields: `chatId`, `base64`, `mimetype`, `filename`, `caption`, `mentions`. Internal `fileName` maps only to wire `filename`; do not send the `fileName` alias.
+- URL images send `url`, not the unsupported `imageUrl` alias.
+- Media captions are limited to 1024 characters; mention tokens must occur in the caption as well as the mentions array.
+- Offline provider DTO validation rejected the previous document body with `property fileName should not exist`; corrected payload had no validation errors.
+- This validates the local source contract, not the deployed server version or actual WhatsApp delivery.
+
+## Live documentation verification — 2026-09-22
+
+- Read-only GET of `http://10.60.10.59:2785/api/docs` and `/api/docs-json` succeeded. Published `info.version` is `0.8.7`, matching the inspected local server package version (not proof of identical source commits).
+- Live `SendMediaMessageDto` exposes `chatId`, `url`, `base64`, `mimetype`, `filename`, `caption`, `mentions`; no `fileName` or `imageUrl`. Caption maximum is 1024. Mention tokens must also occur in the text/caption.
+- Live send-document endpoint documents 400 for inactive session or invalid request. Swagger alone does not prove strict unknown-property rejection or identify the historical ticket 7081 failure; the strict-rejection evidence comes from local DTO validation and source.
+- Live docs expose message history, message reactions, audit logs, and failed webhook deliveries for follow-up diagnostics. No messaging, session changes, or authenticated runtime calls were performed in this verification.
+- Media/body byte limits are not specified in this live DTO. Local source has configurable byte limits; deployed values remain unverified.

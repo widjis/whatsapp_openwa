@@ -69,7 +69,7 @@ type LeaveMappingItem = {
 }
 
 const DEBUG_LAPS_AUTH = process.env.DEBUG_LAPS_AUTH === 'true'
-const recentReactionEvents = new Map<string, number>()
+const recentReactionEvents = new Map<string, { timestamp: number; action: string }>()
 
 type CommandHelpEntry = {
   usage: string
@@ -284,24 +284,16 @@ function parseReactionGroupIds(): Set<string> {
   )
 }
 
-function buildReactionEventKey(args: {
-  chatId: string
-  messageId: string
-  senderId: string
-  reactionText: string | null
-}): string {
-  return [args.chatId, args.messageId, args.senderId, args.reactionText ?? '<removed>'].join('|')
-}
-
-function shouldProcessReactionEvent(key: string): boolean {
+function shouldProcessReactionEvent(key: string, action: string): boolean {
   const now = Date.now()
-  for (const [existingKey, timestamp] of recentReactionEvents) {
-    if (now - timestamp > 15_000) recentReactionEvents.delete(existingKey)
+  for (const [existingKey, entry] of recentReactionEvents) {
+    if (now - entry.timestamp > 15_000) recentReactionEvents.delete(existingKey)
   }
 
   const last = recentReactionEvents.get(key)
-  if (typeof last === 'number' && now - last <= 15_000) return false
-  recentReactionEvents.set(key, now)
+  if (last && last.action === action && now - last.timestamp <= 15_000) return false
+  // Remember only the latest state: removal must allow an immediate new claim.
+  recentReactionEvents.set(key, { timestamp: now, action })
   return true
 }
 
@@ -784,8 +776,15 @@ export class InboundCommandService {
       if (normalized) return normalized
     }
 
-    const resolved = await this.resolveSenderPhoneDigits(event.senderId)
-    return resolved || null
+    if (event.senderId.endsWith('@lid')) {
+      try {
+        const phone = await this.directory.resolvePhone(event.senderId)
+        return phone ? normalizePhoneDigits(phone) || null : null
+      } catch {
+        return null
+      }
+    }
+    return normalizePhoneDigits(extractDigitsFromJid(event.senderId)) || null
   }
 
   private async resolveRequesterNotificationChatId(request: Awaited<ReturnType<typeof viewRequest>>): Promise<string | null> {
@@ -956,6 +955,17 @@ export class InboundCommandService {
     }
 
     if (stored.claimed) {
+      if (stored.claimedByPhone && normalizePhoneDigits(stored.claimedByPhone) === reacterPhone) {
+        this.logReaction('claim', {
+          chatId: event.chatId,
+          messageId: event.messageId,
+          senderPhone: reacterPhone,
+          ticketId,
+          handled: true,
+          outcome: 'same_owner_repeat',
+        })
+        return { handled: true, commandName: 'ticket_claim' }
+      }
       const by = stored.claimedByName ?? stored.claimedByPhone ?? 'another technician'
       await this.sendReactionText(event.chatId, `*Ticket Already Claimed*\nTicket ID: *${ticketId}*\nClaimed by: *${by}*`)
       this.logReaction('claim', {
@@ -1021,6 +1031,17 @@ export class InboundCommandService {
     }
 
     if (claim.wasClaimed) {
+      if (claim.record.claimedByPhone && normalizePhoneDigits(claim.record.claimedByPhone) === reacterPhone) {
+        this.logReaction('claim', {
+          chatId: event.chatId,
+          messageId: event.messageId,
+          senderPhone: reacterPhone,
+          ticketId,
+          handled: true,
+          outcome: 'same_owner_repeat',
+        })
+        return { handled: true, commandName: 'ticket_claim' }
+      }
       const by = claim.record.claimedByName ?? claim.record.claimedByPhone ?? 'another technician'
       await this.sendReactionText(event.chatId, `*Ticket Already Claimed*\nTicket ID: *${ticketId}*\nClaimed by: *${by}*`)
       this.logReaction('claim', {
@@ -2173,13 +2194,19 @@ export class InboundCommandService {
       return { handled: false }
     }
 
-    const eventKey = buildReactionEventKey({
-      chatId: event.chatId,
-      messageId: event.messageId,
-      senderId: event.senderId,
-      reactionText: event.removed ? null : event.emoji,
-    })
-    if (!shouldProcessReactionEvent(eventKey)) {
+    const actorPhone = await this.resolveReactionActorPhone(event)
+    if (!actorPhone) {
+      this.logReaction(event.removed ? 'unclaim' : 'claim', {
+        chatId: event.chatId,
+        messageId: event.messageId,
+        senderId: event.senderId,
+        ignoredReason: 'unresolved_phone',
+      })
+      return { handled: false }
+    }
+    event = { ...event, senderPhone: actorPhone }
+    const eventKey = JSON.stringify([event.sessionId, event.chatId, event.messageId, actorPhone])
+    if (!shouldProcessReactionEvent(eventKey, event.removed ? '<removed>' : event.emoji ?? '')) {
       this.logReaction(event.removed ? 'unclaim' : 'claim', {
         chatId: event.chatId,
         messageId: event.messageId,

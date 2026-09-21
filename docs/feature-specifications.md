@@ -209,6 +209,10 @@ When an eligible technician reacts to a tracked message, the system must allow t
 
 Acceptance:
 - the claim is idempotent
+- repeated claims from the stored owner are handled silently in both the precheck and concurrent-claim result paths; they do not repeat ServiceDesk updates or notifications
+- a different technician still receives the existing already-claimed response
+- reaction deduplication uses resolved actor phone and the latest reaction state; removing then re-adding the same emoji must remain actionable
+- an unresolved LID is ignored rather than interpreted as a phone number
 - concurrent claim attempts do not produce multiple accepted owners
 - response message explains whether claim succeeded or was already taken
 - after a successful claim, direct technician and requester notifications may be sent as best-effort side effects
@@ -391,3 +395,13 @@ The next documents that should be added after this one are:
 2. N8N conversational workflow specification
 3. leave schedule and technician availability specification
 4. integration contracts for OpenWA webhook payload mapping
+
+## Helpdesk attachment/SRF behavior — 2026-09-22
+
+- Use `whatsapp_api_n8nv2` attachment-scoped classification: PDF filename or first-page extracted text must match `service request form`, whole-word `SRF`, `service request`, or `request` (case-insensitive). The broad `request` keyword is retained for reference parity; this is classification, not approval validation.
+- Ticket category, subject or description alone does not classify each attached PDF as SRF.
+- `SRF_DETECTION_AI_ENABLED` and `SRF_DETECTION_AI_MODEL` no longer control classification. AI may still compose the approval text with a deterministic fallback.
+- Send SRF PDF and approval caption in one provider request. Keep configured `SRF_APPROVER_PHONES` mention tokens in the caption and mentions metadata, within 1024 characters.
+- Record the attachment URL only after successful document send. Failed sends remain eligible for retry. Existing URL-level state and sequential duplicate suppression remain; concurrent delivery and ambiguous network outcomes are not guaranteed exactly-once.
+- Preserve production forwarding of regular PDFs/images/other documents and regular attachment forwarding on updated-ticket events. These forwarding behaviors exceed the older reference's analysis/skip behavior.
+- First-page text parsing has no OCR; scanned PDFs without usable filename evidence may not classify as SRF.

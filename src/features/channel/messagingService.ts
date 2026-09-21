@@ -94,7 +94,7 @@ export class MessagingService {
     const base = { chatId, caption: input.caption ?? '', mentions: input.mentions };
     const body =
       input.source.kind === 'url'
-        ? { ...base, url: input.source.url, imageUrl: input.source.url }
+        ? { ...base, url: input.source.url }
         : {
             ...base,
             base64: encodeBase64(input.source.buffer),
@@ -125,7 +125,6 @@ export class MessagingService {
         base64: encodeBase64(input.document),
         mimetype: input.mimetype,
         filename: input.fileName,
-        fileName: input.fileName,
         caption: input.caption ?? '',
         mentions: input.mentions,
       }

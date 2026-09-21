@@ -192,6 +192,9 @@ Allow the first eligible technician to claim a ticket directly from the WhatsApp
    - assigned technician may receive a direct best-effort notification
    - requester may receive a direct best-effort assignment notification
 
+### Repeated reaction from the owner
+A repeated claim event or emoji change from the current owner is handled without another group reply or ServiceDesk update. A removal followed by the same emoji is a new claim transition, not a duplicate of the original addition. LID identities must resolve to a phone before processing.
+
 ### Competing claim path
 1. Another technician reacts after a claim already exists.
 2. System detects existing claim.

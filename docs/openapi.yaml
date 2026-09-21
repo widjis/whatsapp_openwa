@@ -647,6 +647,13 @@ paths:
     post:
       tags: [Messages]
       summary: Process a ServiceDesk ticket notification webhook
+      description: >
+        New-ticket SRF classification uses attachment filename and first-page PDF text,
+        not ticket subject/category alone. SRF approval is delivered as one document
+        with approval caption and configured mentions, limited to 1024 caption characters.
+        Successful SRF delivery is recorded for duplicate suppression; a failed send
+        remains retryable. Attachment failures remain best-effort and do not turn a
+        successfully processed main notification into an HTTP failure.
       parameters:
         - $ref: '#/components/parameters/XForwardedFor'
       requestBody:
@@ -805,7 +812,12 @@ paths:
       description: >
         Public inbound endpoint used by OpenWA. This route persists captures,
         attempts event normalization, and routes supported slash commands into
-        the root inbound command service.
+        the root inbound command service. Reaction events also enter ticket claim/unclaim
+        handling. Repeated claims by the stored owner are handled without another
+        WhatsApp reply or ServiceDesk update; competing technicians retain the
+        already-claimed response. Deduplication uses resolved actor identity and the
+        latest reaction state, allowing removal followed by immediate re-addition.
+        Unresolved LID actors are ignored. HTTP request and response schemas are unchanged.
       requestBody:
         required: true
         content:

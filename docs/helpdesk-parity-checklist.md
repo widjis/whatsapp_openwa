@@ -29,7 +29,7 @@ Status yang dipakai:
 | Notify technician saat assigned | ada | ada | Implemented | Root memanfaatkan `technicianContacts` + send DM. |
 | Attachment analysis from ServiceDesk attachments | `handleAndAnalyzeAttachments()` | `handleAndSendAttachments()` | Implemented | Root sudah download+forward attachments + optional image AI analysis + PDF first-page text extraction + SRF dedupe per attachment content_url. |
 | Group send precheck (announce/admin/bot membership) | `precheckGroupSend()` | `precheckGroupSend()` | Implemented | Root sudah block send jika bot bukan member / group announce-only dan bot bukan admin. |
-| SRF PDF approval (detect SRF document + mention approver + forward PDF) | ada (SRF detector + dedupe + send) | ada (AI-first + heuristic fallback) | Implemented | Root mendeteksi SRF PDF via AI jika `OPENAI_API_KEY` ada dan `SRF_DETECTION_AI_ENABLED=true`, fallback heuristic; mention via `SRF_APPROVER_PHONES`. |
+| SRF PDF approval (detect SRF document + mention approver + forward PDF) | ada (SRF detector + dedupe + send) | ada (attachment-scoped reference rules) | Implemented (Local) | Nama/teks halaman pertama PDF menentukan SRF; PDF + caption approval dikirim dalam satu request dengan mention `SRF_APPROVER_PHONES`. Validasi DTO lokal dan tes regresi lulus; pengiriman produksi belum diverifikasi. |
 
 ## B. Claim/Unclaim via Reaction (Ticket Claim Workflow)
 

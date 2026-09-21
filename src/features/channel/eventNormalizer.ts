@@ -271,7 +271,7 @@ export function normalizeReactionEvent(raw: unknown): ReactionEvent | null {
     chatId,
     messageId,
     senderId,
-    senderPhone: extractStablePhone(reactionPayload.senderPhone, senderId),
+    senderPhone: extractStablePhone(reactionPayload.senderPhone, senderId.endsWith('@lid') ? null : senderId),
     emoji,
     removed: emoji === null || emoji === '',
     occurredAt,

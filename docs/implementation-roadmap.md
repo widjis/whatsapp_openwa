@@ -14,6 +14,27 @@
 - Break checklist work into the smallest practical verifiable items. Prefer many small checkboxes over one large checkbox that hides multiple assumptions.
 - Every completed checklist item must be followed by a challenge/verification step and evidence sync. No item is considered done until verification is recorded.
 
+## Scoped Helpdesk Fix — 2026-09-22
+
+- Behavioral reference: `/Users/widjis/Documents/Projects/whatsapp_api_n8nv2`; production code target: this repository. The embedded `reference/` is supplementary.
+- [x] Suppress repeated same-owner claim replies in both precheck and race-result paths; preserve competing-owner rejection.
+- [x] Resolve reaction LID identities before deduplication and preserve add/remove/add transitions.
+- [x] Verify offline regression scenarios with temporary technician data, memory claim storage, mocked ServiceDesk calls, and mocked WhatsApp sends.
+- Evidence: `node --import tsx --test tests/ticket-reactions.test.mjs` passed (6 scenarios, 7 reported tests including parent); TypeScript no-emit check and build passed; `git diff --check` passed.
+- `docs/openapi.yaml` reviewed and updated for reaction-processing semantics; HTTP schemas/status codes unchanged.
+- Live Redis, provider webhook retries, deployed WhatsApp delivery and ticket 7085 reproduction remain unverified. No deployment performed and no migration phase closed.
+- Existing ticket-wide locking, partial-update recovery, unclaim assignment policy, webhook authentication and malformed reaction handling are outside this scoped fix.
+
+## Scoped Attachment/SRF Fix — 2026-09-22
+
+- [x] Compare production flow with `whatsapp_api_n8nv2` attachment-scoped detection and combined document/caption delivery.
+- [x] Remove unsupported `fileName`/`imageUrl` provider fields; verify against local OpenWA server DTO whitelist.
+- [x] Send one SRF document with bounded approval caption and deterministic approver mentions; record successful sends only.
+- [x] Add offline tests for media request shape, PDF text extraction, classification scope, caption limit, failure/retry, sequential duplicates and update-event attachment delivery.
+- Evidence: `npm run test:helpdesk` passed (11 reported tests), TypeScript check/build and `git diff --check` passed. Provider DTO reproduction rejected old `fileName` and accepted corrected fields.
+- Updated feature spec, parity checklist, OpenAPI, integration contract, journal and operator runbook.
+- Deployed provider version, Redis persistence, real PDF delivery and approver notifications remain to be tested; no migration phase closed and no deployment performed.
+
 ## Progress Snapshot
 - Phase 2 scaffolding already exists in the root runtime:
   - `OpenwaClient`
