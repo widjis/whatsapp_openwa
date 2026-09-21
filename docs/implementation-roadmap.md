@@ -65,6 +65,11 @@
 - Verification: 12 helpdesk tests and TypeScript build passed; compiled validator accepts the reported list locally. User's deployed function has extra escapes, requiring source sync and image rebuild.
 - OpenAPI reviewed; no contract change. Production acceptance pending; no phase closed.
 
+## Confirmed SRF Unicode formatting fix — 2026-09-22
+- [x] Reproduce entry 3 wrapped in U+202A/U+202C, clean formatting before validation, and report invalid entry index.
+- Verification: exact production value and invalid-content rejection assertions passed in the 12-test helpdesk suite; TypeScript build passed.
+- Earlier regex/image hypotheses are superseded by the production character dump for this failure. Deployment to the remote host is pending. No schema or migration phase change.
+
 ## Progress Snapshot
 - Phase 2 scaffolding already exists in the root runtime:
   - `OpenwaClient`

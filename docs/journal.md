@@ -766,3 +766,9 @@
 - Added the exact reported four-number list, legacy JID normalization, and malformed group suffix to regression assertions.
 - Helpdesk suite and TypeScript build passed; compiled validator accepts the reported configuration locally. Container requires updated source plus image rebuild; env-only restart is insufficient.
 - OpenAPI reviewed; accepted formats and external contract unchanged. No deployment performed.
+
+## [2026-09-22] Confirm hidden direction marks in production SRF phone list
+- Production character inspection confirms entry 3 contains U+202A and U+202C. The displayed digits are valid; trim() leaves these controls intact. Earlier regex/image explanations did not establish the actual cause.
+- Strip known zero-width/directional formatting marks before phone validation; retain strict visible-character validation, reject formatting-only entries and identify invalid entry by index without printing its value.
+- Exact reported Unicode-wrapped four-number case, invalid visible content and formatting-only rejection covered by regression assertions.
+- 12 helpdesk tests and build passed locally; remote deployment remains pending. OpenAPI reviewed: no schema change; accepted pasted formatting documented in deployment guide.

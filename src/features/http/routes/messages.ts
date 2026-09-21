@@ -512,8 +512,16 @@ const REFERENCE_SRF_GROUP = '120363162455880145@g.us'
 export function getSrfApprovalTargets(): { mentions: string[]; chatId: string } {
   const configured = parsePhonesEnv('SRF_APPROVER_PHONES')
   const phones = configured.length ? configured : REFERENCE_SRF_APPROVERS
-  const mentions = [...new Set(phones.map((value) => {
-    if (!/^[+]?[0-9 ()-]+(?:@c[.]us|@s[.]whatsapp[.]net)?$/.test(value)) throw new Error('Invalid SRF_APPROVER_PHONES entry')
+  const mentions = [...new Set(phones.map((rawValue, index) => {
+    // Chat/contacts copy-paste can wrap phone numbers in invisible direction marks.
+    // Remove formatting only; visible invalid characters must still be rejected.
+    const value = Array.from(rawValue).filter((character) => {
+      const code = character.codePointAt(0)!
+      return !((code >= 0x200B && code <= 0x200F) ||
+        (code >= 0x202A && code <= 0x202E) ||
+        (code >= 0x2066 && code <= 0x2069) || code === 0xFEFF)
+    }).join('').trim()
+    if (!/^[+]?[0-9 ()-]+(?:@c[.]us|@s[.]whatsapp[.]net)?$/.test(value)) throw new Error(`Invalid SRF_APPROVER_PHONES entry #${index + 1}`)
     const phone = normalizePhoneDigits(value.split('@')[0])
     if (phone.length < 8 || phone.length > 15) throw new Error('Invalid SRF approver phone length')
     return `${phone}@c.us`

@@ -119,6 +119,13 @@ test('SRF delivery is one document with caption; failed sends remain retryable',
     assert.equal(buildSrfDocumentCaption(text,targets.mentions), 'A kind reminder, Pak @628111111111, @628222222222, terkait SRF terlampir "SRF.pdf", dengan Ticket ID 7089 dari Test Requester, mengenai Permintaan router Wi-Fi. Mohon bantuannya untuk review dan approval. Terima kasih.');
     process.env.SRF_APPROVER_PHONES = '6282323336511,6285712612218,6285255150721,6281132041331';
     assert.deepEqual(getSrfApprovalTargets().mentions, ['6282323336511@c.us','6285712612218@c.us','6285255150721@c.us','6281132041331@c.us']);
+    // Exact production failure: the third entry was wrapped in U+202A/U+202C.
+    process.env.SRF_APPROVER_PHONES = '6282323336511,6285712612218,' + String.fromCodePoint(0x202A) + '6285255150721' + String.fromCodePoint(0x202C) + ',6281132041331';
+    assert.deepEqual(getSrfApprovalTargets().mentions, ['6282323336511@c.us','6285712612218@c.us','6285255150721@c.us','6281132041331@c.us']);
+    process.env.SRF_APPROVER_PHONES = '6282323336511,' + String.fromCodePoint(0x202A) + 'bad' + String.fromCodePoint(0x202C);
+    assert.throws(getSrfApprovalTargets,/entry #2/);
+    process.env.SRF_APPROVER_PHONES = String.fromCodePoint(0x202A, 0x202C);
+    assert.throws(getSrfApprovalTargets,/entry #1/);
     process.env.SRF_APPROVER_PHONES = '6282323336511@s.whatsapp.net';
     assert.deepEqual(getSrfApprovalTargets().mentions, ['6282323336511@c.us']);
     process.env.SRF_APPROVAL_GROUP_ID = '123456@gXus';
