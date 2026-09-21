@@ -418,3 +418,11 @@ Align deployment, runbook, and repository onboarding with the new OpenWA-only im
 - A phase is not complete just because code exists.
 - A phase completes only when its verification evidence is captured and related docs are synchronized.
 - `reference/` is a behavioral baseline for reproduction, not the active runtime.
+
+## SRF destination precedence — 2026-09-22
+
+- Final user direction: nonblank `SRF_APPROVAL_GROUP_ID` overrides the SRF destination; unset/blank/whitespace follows the normalized webhook `receiver`. No hardcoded destination fallback.
+- Group overrides are validated; invalid overrides produce an attachment error. Approver mentions and normal notification/attachment routing are unchanged.
+- Verified locally: 12 helpdesk tests and TypeScript build passed. Delivery regressions cover configured, whitespace-trimmed, unset, empty and whitespace-only overrides; invalid group validation also covered.
+- Updated OpenAPI, feature specification, operator workflow, deployment guide and environment example. Payload schema unchanged.
+- Phase 1 remains active; deployment and real delivery are pending. Existing successful-send dedupe records are preserved.

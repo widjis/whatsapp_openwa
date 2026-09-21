@@ -772,3 +772,11 @@
 - Strip known zero-width/directional formatting marks before phone validation; retain strict visible-character validation, reject formatting-only entries and identify invalid entry by index without printing its value.
 - Exact reported Unicode-wrapped four-number case, invalid visible content and formatting-only rejection covered by regression assertions.
 - 12 helpdesk tests and build passed locally; remote deployment remains pending. OpenAPI reviewed: no schema change; accepted pasted formatting documented in deployment guide.
+
+## SRF destination precedence — 2026-09-22
+
+- Final user direction: nonblank `SRF_APPROVAL_GROUP_ID` overrides the SRF destination; unset/blank/whitespace follows the normalized webhook `receiver`. No hardcoded destination fallback.
+- Group overrides are validated; invalid overrides produce an attachment error. Approver mentions and normal notification/attachment routing are unchanged.
+- Verified locally: 12 helpdesk tests and TypeScript build passed. Delivery regressions cover configured, whitespace-trimmed, unset, empty and whitespace-only overrides; invalid group validation also covered.
+- Updated OpenAPI, feature specification, operator workflow, deployment guide and environment example. Payload schema unchanged.
+- Phase 1 remains active; deployment and real delivery are pending. Existing successful-send dedupe records are preserved.

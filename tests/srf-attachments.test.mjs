@@ -89,6 +89,15 @@ test('SRF delivery is one document with caption; failed sends remain retryable',
     calls.length=0;
     await handleAndSendAttachments(args);
     assert.equal(calls.filter(c=>c.kind==='document').length,0);
+    for (const [index, group] of [undefined, '', '   ', '  987654@g.us  '].entries()) {
+      if (group === undefined) delete process.env.SRF_APPROVAL_GROUP_ID;
+      else process.env.SRF_APPROVAL_GROUP_ID = group;
+      calls.length=0;
+      await handleAndSendAttachments({...args,request:{...request,id:`ROUTING-${index}`}});
+      assert.deepEqual(calls.map(c=>c.kind),['document']);
+      assert.equal(calls[0].input.chatId,group?.trim() || args.receiverJid);
+      assert.deepEqual(calls[0].input.mentions,['628111111111@c.us','628222222222@c.us']);
+    }
     calls.length=0;
     await handleAndSendAttachments({...args,request:{...request,id:'UPDATED'},allowSrfApproval:false});
     assert.equal(calls[0].kind,'document');
@@ -108,8 +117,7 @@ test('SRF delivery is one document with caption; failed sends remain retryable',
     delete process.env.SRF_APPROVAL_GROUP_ID;
     delete process.env.OPENAI_API_KEY;
     assert.deepEqual(getSrfApprovalTargets(), {
-      mentions: ['6282323336511@c.us','6285712612218@c.us','6289524548777@c.us','6281132041331@c.us'],
-      chatId: '120363162455880145@g.us'
+      mentions: ['6282323336511@c.us','6285712612218@c.us','6289524548777@c.us','6281132041331@c.us']
     });
     process.env.SRF_APPROVER_PHONES = '08111111111,+628111111111,628222222222@c.us';
     process.env.SRF_APPROVAL_GROUP_ID = '123456@g.us';

@@ -100,12 +100,11 @@ Copy the values in [srf-approval.env.example](srf-approval.env.example) into the
 
 ```env
 SRF_APPROVER_PHONES=6282323336511,6285712612218,6289524548777,6281132041331
-SRF_APPROVAL_GROUP_ID=120363162455880145@g.us
 ```
 
-These are the production defaults from `whatsapp_api_n8nv2`. Missing/blank values use those defaults. To change recipients, provide a comma-separated list; numbers normalize to international format and duplicates are removed. Invalid phone entries/group JIDs prevent SRF sending with an attachment error.
+These are the approver defaults from `whatsapp_api_n8nv2`. Missing/blank phone configuration uses those defaults. To change recipients, provide a comma-separated list; numbers normalize to international format and duplicates are removed. Invalid phone entries prevent SRF sending with an attachment error.
 
-The SRF PDF goes to the configured approval group; the main notification and other attachments continue to use the webhook receiver. Changing targets does not automatically resend already recorded SRF attachments. Verify with a new test ticket/attachment, not by clearing production dedupe data.
+SRF PDFs use `SRF_APPROVAL_GROUP_ID` when nonblank; otherwise they follow the normalized webhook `receiver`. An override must be a valid group JID. Main notifications and other attachments always follow the webhook receiver. Changing targets does not automatically resend already recorded SRF attachments. Verify with a new test ticket/attachment, not by clearing production dedupe data.
 
 Caption uses the fixed format `A kind reminder, Pak @number1, @number2, terkait SRF terlampir "[filename]", dengan Ticket ID [id] dari [requester], mengenai [summary]. Mohon bantuannya untuk review dan approval. Terima kasih.` AI only generates the short summary; fallback uses the ticket subject. Full PDF text is extracted for summary input, bounded to 12000 characters; detection still uses first-page evidence. No OCR is introduced.
 

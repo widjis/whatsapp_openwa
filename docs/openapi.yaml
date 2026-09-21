@@ -651,9 +651,10 @@ paths:
         New-ticket SRF classification uses attachment filename and first-page PDF text,
         not ticket subject/category alone. SRF approval is delivered as one document
         with a fixed approval caption and configured mentions, limited to 1024 caption characters.
-        SRF_APPROVER_PHONES and SRF_APPROVAL_GROUP_ID override the n8n v2 production
-        defaults (four approvers and its dedicated approval group). SRF documents go
-        to that group; the main notification and regular attachments use the receiver.
+        SRF_APPROVER_PHONES overrides the four n8n v2 production approvers.
+        SRF documents use SRF_APPROVAL_GROUP_ID when nonblank (must be a group JID),
+        otherwise the payload receiver. Main notifications and regular attachments
+        always use the payload receiver.
         AI only summarizes the request; it does not choose recipients or caption layout.
         Successful SRF delivery is recorded for duplicate suppression; a failed send
         remains retryable. Attachment failures remain best-effort and do not turn a

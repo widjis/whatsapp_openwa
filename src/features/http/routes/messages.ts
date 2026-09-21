@@ -507,9 +507,8 @@ export function isSrfPdfAttachmentHeuristic(args: {
 }
 
 const REFERENCE_SRF_APPROVERS = ['6282323336511', '6285712612218', '6289524548777', '6281132041331']
-const REFERENCE_SRF_GROUP = '120363162455880145@g.us'
 
-export function getSrfApprovalTargets(): { mentions: string[]; chatId: string } {
+export function getSrfApprovalTargets(): { mentions: string[]; chatId?: string } {
   const configured = parsePhonesEnv('SRF_APPROVER_PHONES')
   const phones = configured.length ? configured : REFERENCE_SRF_APPROVERS
   const mentions = [...new Set(phones.map((rawValue, index) => {
@@ -526,9 +525,9 @@ export function getSrfApprovalTargets(): { mentions: string[]; chatId: string } 
     if (phone.length < 8 || phone.length > 15) throw new Error('Invalid SRF approver phone length')
     return `${phone}@c.us`
   }))]
-  const chatId = process.env.SRF_APPROVAL_GROUP_ID?.trim() || REFERENCE_SRF_GROUP
-  if (!/^[0-9-]+@g[.]us$/.test(chatId)) throw new Error('SRF_APPROVAL_GROUP_ID must be a group JID')
-  return { mentions, chatId }
+  const chatId = process.env.SRF_APPROVAL_GROUP_ID?.trim()
+  if (chatId && !/^[0-9-]+@g[.]us$/.test(chatId)) throw new Error('SRF_APPROVAL_GROUP_ID must be a group JID')
+  return chatId ? { mentions, chatId } : { mentions }
 }
 
 export async function buildSrfApprovalMessage(args: {
@@ -707,7 +706,7 @@ export async function handleAndSendAttachments(args: {
           pdfText,
         })
         await args.messaging.sendDocument({
-          chatId: targets.chatId,
+          chatId: targets.chatId ?? args.receiverJid,
           document: buffer,
           mimetype: contentType || 'application/pdf',
           fileName: name,

@@ -407,8 +407,8 @@ The next documents that should be added after this one are:
 - First-page text parsing has no OCR; scanned PDFs without usable filename evidence may not classify as SRF.
 
 ### SRF reference parity — 2026-09-22
-- Default approvers and destination group match n8n v2; override through `SRF_APPROVER_PHONES` and `SRF_APPROVAL_GROUP_ID` (see deployment guide).
+- Default approvers match n8n v2; override through `SRF_APPROVER_PHONES` (see deployment guide). A nonblank `SRF_APPROVAL_GROUP_ID` overrides the SRF destination; otherwise it follows the webhook payload `receiver`.
 - Preserve original document bytes and filename. Always put every configured mention in caption and metadata.
 - Caption starts with `A kind reminder, Pak @number, ...` and ends with `Mohon bantuannya untuk review dan approval. Terima kasih.` within 1024 characters; dynamic fields are bounded.
 - Summary can use extracted full PDF text (up to 12000 characters supplied to AI); failed extraction or AI uses first-page/ticket-subject fallback. No OCR.
-- Main notification stays at webhook receiver; only recognized SRF approval documents go to the dedicated approval group.
+- Main notifications follow the normalized webhook receiver. SRF approval documents follow that receiver unless the optional group override is set.

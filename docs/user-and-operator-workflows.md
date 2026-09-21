@@ -373,4 +373,4 @@ The next workflow documents that should be added are:
 4. leave schedule maintenance workflow
 
 ## SRF approval routing
-The main ticket notification follows the webhook receiver. Recognized SRF PDFs are delivered unchanged to `SRF_APPROVAL_GROUP_ID` with a fixed concise caption and all `SRF_APPROVER_PHONES` mentions. Unset values use the n8n v2 production approvers and group. Other attachments retain receiver routing. See `docs/srf-approval.env.example`; use a new test ticket to verify changes without removing existing dedupe state.
+The main ticket notification follows the webhook receiver. Recognized SRF PDFs are delivered unchanged to `SRF_APPROVAL_GROUP_ID` when nonblank, otherwise to the normalized webhook `receiver` with a fixed concise caption and all `SRF_APPROVER_PHONES` mentions. Unset phone configuration uses the n8n v2 production approvers. A configured override must be a valid group JID. Other attachments retain receiver routing. See `docs/srf-approval.env.example`; use a new test ticket to verify changes without removing existing dedupe state.
